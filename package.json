@@ -1,0 +1,13 @@
+{
+  "name": "ai-minecarft",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Minecraft AI controls with Mineflayer and Ultralytics",
+  "main": "controller.js",
+  "scripts": {
+    "start": "node controller.js"
+  },
+  "dependencies": {
+    "mineflayer": "latest"
+  }
+}
