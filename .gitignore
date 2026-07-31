@@ -1,0 +1,15 @@
+.venv/
+venv/
+node_modules/
+.idea/
+__pycache__/
+*.pyc
+*.pyo
+*.pt
+*.onnx
+*.engine
+*.cache
+runs/
+Data/
+.env
+.DS_Store
