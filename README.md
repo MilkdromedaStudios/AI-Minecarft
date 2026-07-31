@@ -6,6 +6,51 @@ A small Minecraft AI project using:
 - **Mineflayer** for Minecraft controls
 - a tiny local TCP bridge so Python can send actions to the bot
 
+Licensed under the **MIT License**.
+
+## Easiest way to get a tested build
+
+GitHub Actions now checks and packages the project automatically on every push to `main`.
+
+1. Open this repository on GitHub.
+2. Open **Actions**.
+3. Select **Build Minecraft AI**.
+4. Open the newest successful run.
+5. Under **Artifacts**, download:
+
+```text
+AI-Minecarft-Windows-Test-Package
+```
+
+6. Extract the downloaded artifact ZIP.
+7. Extract `AI-Minecarft.zip` inside it.
+8. On Windows, run:
+
+```text
+setup_windows.bat
+```
+
+That installs the Python requirements and Mineflayer. Then start your Minecraft server and run:
+
+```text
+run_controller.bat
+```
+
+## What GitHub Actions checks
+
+The build workflow:
+
+- installs Python 3.12
+- installs the Python dependencies from `requirements.txt`
+- installs Node.js 20
+- installs Mineflayer
+- syntax-checks `run.py`, `train.py`, and `send_control.py`
+- syntax-checks `controller.js`
+- validates the JSON control files
+- creates a downloadable Windows test package
+
+GitHub Actions cannot test the actual Minecraft connection because your Minecraft world/server runs on your PC. The final in-game test is therefore local.
+
 ## Project layout
 
 ```text
@@ -18,24 +63,28 @@ AI-Minecarft/
 ├── control_sequences.json
 ├── requirements.txt
 ├── package.json
+├── setup_windows.bat
+├── run_controller.bat
+├── LICENSE
 └── Data/                 # keep your local Roboflow dataset/model here
 ```
 
-## 1. Python setup
+## Manual setup
+
+If you clone the repository instead of downloading the Actions artifact:
 
 ```powershell
 pip install -r requirements.txt
-```
-
-## 2. Mineflayer setup
-
-Install Node.js once, then run:
-
-```powershell
 npm install
 ```
 
-## 3. Start the Minecraft controller
+Or just run:
+
+```text
+setup_windows.bat
+```
+
+## Start the Minecraft controller
 
 Open `controller.js` and change these settings if needed:
 
@@ -52,13 +101,19 @@ Then run:
 node controller.js
 ```
 
+or double-click:
+
+```text
+run_controller.bat
+```
+
 The controller listens on:
 
 ```text
 127.0.0.1:5050
 ```
 
-## 4. Test controls manually
+## Test controls manually
 
 In another terminal:
 
@@ -87,7 +142,7 @@ mine
 attack
 ```
 
-## 5. Test your trained detector
+## Test your trained detector
 
 Keep the trained detection model at:
 
@@ -109,7 +164,7 @@ python run.py
 
 `run.py` picks a random test image, runs YOLO, prints detections, and shows bounding boxes.
 
-## 6. Train again if needed
+## Train again if needed
 
 Keep the Roboflow YOLO26 export at:
 
