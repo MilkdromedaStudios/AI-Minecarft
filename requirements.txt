@@ -1,3 +1,6 @@
 ultralytics
 opencv-python
 numpy
+PyYAML
+huggingface_hub
+roboflow
