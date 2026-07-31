@@ -1,121 +1,111 @@
 # AI Minecraft
 
-A small Minecraft AI project using:
-
-- **Ultralytics YOLO26** for object detection
-- **Mineflayer** for Minecraft controls
-- a tiny local TCP bridge so Python can send actions to the bot
+Minecraft AI experiment using **Ultralytics YOLO26** for object detection and **Mineflayer** for controls.
 
 Licensed under the **MIT License**.
 
-## Easiest way to get a tested build
+## Automatic GitHub build
 
-GitHub Actions now checks and packages the project automatically on every push to `main`.
+The GitHub Actions workflow **Build and Train Minecraft AI** runs on **every push to any branch**, on pull requests, and can also be started manually.
 
-1. Open this repository on GitHub.
-2. Open **Actions**.
-3. Select **Build Minecraft AI**.
-4. Open the newest successful run.
-5. Under **Artifacts**, download:
+Every build:
 
-```text
-AI-Minecarft-Windows-Test-Package
-```
+1. installs Python and Node.js dependencies;
+2. downloads the public Minecraft-Objects gameplay dataset from Roboflow;
+3. downloads the CC BY 4.0 Minecraft mob gameplay dataset from Hugging Face;
+4. merges both YOLO datasets and remaps overlapping class IDs;
+5. trains a YOLO26 nano detector on CPU;
+6. writes the resulting model to `models/best.pt`;
+7. stores `models/best.pt` through **Git LFS** on push builds;
+8. creates the downloadable `AI-Minecarft-Windows-Test-Package` artifact.
 
-6. Extract the downloaded artifact ZIP.
-7. Extract `AI-Minecarft.zip` inside it.
-8. On Windows, run:
+The automatic CI build currently uses a short CPU-friendly training run (`2` epochs, `416` image size). Increase `TRAIN_EPOCHS`, `TRAIN_IMGSZ`, or `TRAIN_BATCH` in `.github/workflows/build.yml` when you want longer training.
 
-```text
-setup_windows.bat
-```
+## Training datasets
 
-That installs the Python requirements and Mineflayer. Then start your Minecraft server and run:
+Dataset definitions are kept in `dataset_sources.json`.
 
-```text
-run_controller.bat
-```
+- **Minecraft-Objects**: `minecraftdataset/minecraft-objects/2` from Roboflow Universe.
+- **Minecraft Mobs YOLO Dataset**: `hmnshudhmn24/minecraft-mobs-yolo-dataset` from Hugging Face, CC BY 4.0, credited to Draco TLW (Muhammad Alimuhammadi).
 
-## What GitHub Actions checks
+The raw ~844 MB mob dataset is downloaded/cached by Actions instead of being committed into normal Git history.
 
-The build workflow:
+## AI control files
 
-- installs Python 3.12
-- installs the Python dependencies from `requirements.txt`
-- installs Node.js 20
-- installs Mineflayer
-- syntax-checks `run.py`, `train.py`, and `send_control.py`
-- syntax-checks `controller.js`
-- validates the JSON control files
-- creates a downloadable Windows test package
-
-GitHub Actions cannot test the actual Minecraft connection because your Minecraft world/server runs on your PC. The final in-game test is therefore local.
-
-## Project layout
+There are three control layers:
 
 ```text
-AI-Minecarft/
-├── run.py
-├── train.py
-├── send_control.py
-├── controller.js
-├── controls.json
-├── control_sequences.json
-├── requirements.txt
-├── package.json
-├── setup_windows.bat
-├── run_controller.bat
-├── LICENSE
-└── Data/                 # keep your local Roboflow dataset/model here
+controls.json
+    low-level action vocabulary
+
+controller.json
+    detected object -> desired behavior/tool policy
+
+controller.js
+    receives commands and actually controls Mineflayer
 ```
 
-## Manual setup
+Examples from `controller.json`:
 
-If you clone the repository instead of downloading the Actions artifact:
+```text
+creeper -> back
+diamond -> mine using pickaxe
+iron -> mine using pickaxe
+zombie -> attack using sword
+skeleton -> attack using sword
+enderman -> ignore by default
+```
+
+`controller.js` accepts either a direct action:
+
+```json
+{"action":"forward"}
+```
+
+or a YOLO detection:
+
+```json
+{"detected":"diamond-ore"}
+```
+
+and maps the detected label through `controller.json`.
+
+## Download a ready build
+
+1. Open **Actions** in this repository.
+2. Open the newest successful **Build and Train Minecraft AI** run.
+3. Download `AI-Minecarft-Windows-Test-Package`.
+4. Extract it.
+5. Run `setup_windows.bat`.
+6. Start your Minecraft Java server/world.
+7. Run `run_controller.bat`.
+
+## Clone instead
+
+If you clone the repository, make sure Git LFS is installed, then:
 
 ```powershell
+git lfs install
+git lfs pull
 pip install -r requirements.txt
 npm install
 ```
 
-Or just run:
+The trained GitHub model is:
 
 ```text
-setup_windows.bat
+models/best.pt
 ```
 
-## Start the Minecraft controller
+## Test the controller manually
 
-Open `controller.js` and change these settings if needed:
-
-```js
-host: "localhost",
-port: 25565,
-username: "MinecraftAI",
-auth: "offline"
-```
-
-Then run:
+Start:
 
 ```powershell
 node controller.js
 ```
 
-or double-click:
-
-```text
-run_controller.bat
-```
-
-The controller listens on:
-
-```text
-127.0.0.1:5050
-```
-
-## Test controls manually
-
-In another terminal:
+Then from another terminal:
 
 ```powershell
 python send_control.py forward
@@ -125,84 +115,42 @@ python send_control.py mine
 python send_control.py attack
 ```
 
-Supported commands include:
+The Mineflayer receiver listens on `127.0.0.1:5050`.
 
-```text
-forward
-back
-left
-right
-jump
-stop
-turn_left
-turn_right
-look_up
-look_down
-mine
-attack
-```
+## Test YOLO locally
 
-## Test your trained detector
-
-Keep the trained detection model at:
-
-```text
-Data/minecraft_detector/weights/best.pt
-```
-
-and your Roboflow test images at:
-
-```text
-Data/test/images/
-```
-
-Then run:
+If you have the Roboflow test images in `Data/test/images/`, run:
 
 ```powershell
 python run.py
 ```
 
-`run.py` picks a random test image, runs YOLO, prints detections, and shows bounding boxes.
+`run.py` prefers `models/best.pt` and prints both the detected label and the action selected by `controller.json`.
 
-## Train again if needed
-
-Keep the Roboflow YOLO26 export at:
+## Repository layout
 
 ```text
-Data/data.yaml
-Data/train/images/
-Data/train/labels/
-Data/valid/images/
-Data/valid/labels/
-Data/test/images/
-Data/test/labels/
+AI-Minecarft/
+├── .github/workflows/build.yml
+├── .gitattributes
+├── LICENSE
+├── README.md
+├── controller.js
+├── controller.json
+├── controls.json
+├── control_sequences.json
+├── dataset_sources.json
+├── prepare_dataset.py
+├── train_ci.py
+├── run.py
+├── train.py
+├── send_control.py
+├── requirements.txt
+├── package.json
+├── setup_windows.bat
+├── run_controller.bat
+└── models/
+    └── best.pt       # Git LFS after the first successful push build
 ```
 
-Then:
-
-```powershell
-python train.py
-```
-
-## How the pieces fit
-
-```text
-YOLO -> sees objects
-Python brain -> chooses a command
-controller.js -> Mineflayer performs the command
-```
-
-`controls.json` and `control_sequences.json` are the action vocabulary/reference for the decision layer. The detector itself does not learn JavaScript controls from JSON.
-
-## Not stored in GitHub
-
-The `.gitignore` excludes large or machine-specific files such as:
-
-- `.venv/`
-- `node_modules/`
-- `.idea/`
-- `*.pt` model weights
-- local datasets under `Data/`
-- Ultralytics run/cache output
-
-Keep your dataset and `best.pt` on your PC unless you intentionally decide to publish them later.
+Large temporary build datasets, Python environments, `node_modules`, IDE files, and Ultralytics caches are ignored.
