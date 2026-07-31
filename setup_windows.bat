@@ -21,6 +21,15 @@ if errorlevel 1 (
   exit /b 1
 )
 
+if exist ".git" (
+  where git-lfs >nul 2>nul
+  if not errorlevel 1 (
+    echo Pulling trained best.pt from Git LFS...
+    git lfs install
+    git lfs pull
+  )
+)
+
 echo Installing Python packages...
 python -m pip install -r requirements.txt
 if errorlevel 1 goto :fail
