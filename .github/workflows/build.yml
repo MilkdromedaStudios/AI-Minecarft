@@ -1,0 +1,65 @@
+name: Build Minecraft AI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Node dependencies
+        run: npm install
+
+      - name: Check Python files
+        run: python -m py_compile run.py train.py send_control.py
+
+      - name: Check JavaScript
+        run: node --check controller.js
+
+      - name: Check JSON files
+        run: |
+          python -m json.tool controls.json > /dev/null
+          python -m json.tool control_sequences.json > /dev/null
+          python -m json.tool package.json > /dev/null
+
+      - name: Build downloadable package
+        run: |
+          mkdir -p dist/AI-Minecarft
+          cp README.md LICENSE controller.js controls.json control_sequences.json run.py train.py send_control.py requirements.txt package.json setup_windows.bat run_controller.bat dist/AI-Minecarft/
+          cp package-lock.json dist/AI-Minecarft/ 2>/dev/null || true
+          cd dist
+          zip -r AI-Minecarft.zip AI-Minecarft
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AI-Minecarft-Windows-Test-Package
+          path: dist/AI-Minecarft.zip
+          if-no-files-found: error
+          retention-days: 30
