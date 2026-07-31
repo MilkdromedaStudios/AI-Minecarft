@@ -5,11 +5,17 @@ node_modules/
 __pycache__/
 *.pyc
 *.pyo
-*.pt
 *.onnx
 *.engine
 *.cache
 runs/
 Data/
+build_data/
+build_output/
 .env
 .DS_Store
+
+# Model weights are normally ignored except the CI-trained LFS model.
+*.pt
+!models/
+!models/best.pt
