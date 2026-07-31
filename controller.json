@@ -1,0 +1,34 @@
+{
+  "default_action": "forward",
+  "description": "High-level behavior policy. YOLO detects a label; controller.js maps it to an action.",
+  "objects": {
+    "creeper": {"action": "back", "priority": 100, "reason": "avoid explosion"},
+    "zombie": {"action": "attack", "priority": 80, "tool": "sword"},
+    "skeleton": {"action": "attack", "priority": 85, "tool": "sword"},
+    "spider": {"action": "attack", "priority": 75, "tool": "sword"},
+    "enderman": {"action": "ignore", "priority": 20, "reason": "do not provoke by default"},
+    "cow": {"action": "ignore", "priority": 15},
+    "pig": {"action": "ignore", "priority": 15},
+    "sheep": {"action": "ignore", "priority": 15},
+    "diamond": {"action": "mine", "priority": 95, "tool": "pickaxe"},
+    "emerald": {"action": "mine", "priority": 90, "tool": "pickaxe"},
+    "gold": {"action": "mine", "priority": 80, "tool": "pickaxe"},
+    "iron": {"action": "mine", "priority": 80, "tool": "pickaxe"},
+    "copper": {"action": "mine", "priority": 50, "tool": "pickaxe"},
+    "coal": {"action": "mine", "priority": 65, "tool": "pickaxe"},
+    "wood": {"action": "mine", "priority": 70, "tool": "axe"},
+    "planks": {"action": "ignore", "priority": 10},
+    "cobblestone": {"action": "ignore", "priority": 5},
+    "dirt": {"action": "ignore", "priority": 5}
+  },
+  "aliases": {
+    "diamond-ore": "diamond",
+    "iron-ore": "iron",
+    "gold-ore": "gold",
+    "coal-ore": "coal",
+    "copper-ore": "copper",
+    "oak-log": "wood",
+    "birch-log": "wood",
+    "spruce-log": "wood"
+  }
+}
