@@ -7,6 +7,7 @@ import gradio as gr
 import spaces
 
 from minecraft_builder import KIMI_MODEL, BlockSmithError, build_project, list_minecraft_versions, loader_note
+from modeling_builder import MODEL_FORMATS, build_model_project
 
 THEME = gr.themes.Soft().set(
     body_background_fill="#f7f8fb",
@@ -67,7 +68,7 @@ TOGGLE_JS = r"""
 }
 """
 
-ARTIFACTS = ["Minecraft mod", "Server plugin", "Resource pack", "Shader pack"]
+ARTIFACTS = ["Minecraft mod", "Server plugin", "Resource pack", "Shader pack", "3D model / animation"]
 OUTPUT_CHOICES = ["JAR + Source", "JAR only", "Source only"]
 
 
@@ -85,13 +86,39 @@ def refresh_versions():
 
 def on_artifact_change(kind: str):
     if kind == "Minecraft mod":
-        return gr.update(choices=["Fabric", "Forge", "NeoForge", "Quilt"], value="Fabric"), gr.update(visible=True, value="JAR + Source")
+        return (
+            gr.update(label="Loader / platform", choices=["Fabric", "Forge", "NeoForge", "Quilt"], value="Fabric"),
+            gr.update(visible=True, value="JAR + Source"),
+            gr.update(visible=False, value=None),
+        )
     if kind == "Server plugin":
-        return gr.update(choices=["Paper", "Purpur"], value="Paper"), gr.update(visible=True, value="JAR + Source")
-    return gr.update(choices=["Vanilla / N/A"], value="Vanilla / N/A"), gr.update(visible=False, value="Source only")
+        return (
+            gr.update(label="Loader / platform", choices=["Paper", "Purpur"], value="Paper"),
+            gr.update(visible=True, value="JAR + Source"),
+            gr.update(visible=False, value=None),
+        )
+    if kind == "3D model / animation":
+        return (
+            gr.update(label="Model format / target", choices=MODEL_FORMATS, value=MODEL_FORMATS[0]),
+            gr.update(visible=False, value="Source only"),
+            gr.update(visible=True, value=None),
+        )
+    return (
+        gr.update(label="Loader / platform", choices=["Vanilla / N/A"], value="Vanilla / N/A"),
+        gr.update(visible=False, value="Source only"),
+        gr.update(visible=False, value=None),
+    )
 
 
 def explain_loader(loader: str, version: str):
+    if loader in MODEL_FORMATS:
+        notes = {
+            "Java block/item model": "🧊 Generates Minecraft Java block/item model JSON, elements, faces, UVs, and texture references.",
+            "Blockbench (.bbmodel)": "📐 Generates an editable Blockbench `.bbmodel` project plus a practical runtime export when appropriate.",
+            "GeckoLib model + animation": "🦎 Generates GeckoLib geometry and animation JSON with matching bones, pivots, cubes, UVs, and animation channels.",
+            "Modded entity model": "🧍 Generates entity geometry/model assets and the small model/renderer source needed to use them in a mod.",
+        }
+        return notes.get(loader, "3D modeling target.")
     return loader_note(loader, version)
 
 
@@ -102,6 +129,7 @@ def run_builder(
     version: str,
     prompt: str,
     output_preference: str,
+    reference_image,
     base_archive,
     base_folder,
     include_readme: bool,
@@ -116,6 +144,15 @@ def run_builder(
             "No Hugging Face OAuth token was supplied to the build function.",
         )
     try:
+        if artifact_kind == "3D model / animation":
+            return build_model_project(
+                project_name=project_name,
+                model_format=loader,
+                minecraft_version=version,
+                user_prompt=prompt,
+                reference_image=reference_image,
+                hf_token=token,
+            )
         return build_project(
             project_name=project_name,
             artifact_kind=artifact_kind,
@@ -152,11 +189,13 @@ with gr.Blocks(title="BlockSmith — Kimi K3 Minecraft Builder", theme=THEME) as
             f"""
             <section id="hero">
               <h1>⛏️ BlockSmith</h1>
-              <p>Generate, compile, repair, and validate Minecraft projects with <b>{KIMI_MODEL}</b>.</p>
+              <p>Generate, model, compile, repair, and validate Minecraft projects with <b>{KIMI_MODEL}</b>.</p>
               <div>
                 <span class="mc-badge">Fabric</span><span class="mc-badge">Forge</span>
                 <span class="mc-badge">NeoForge</span><span class="mc-badge">Quilt</span>
                 <span class="mc-badge">Paper</span><span class="mc-badge">Purpur</span>
+                <span class="mc-badge">Blockbench</span><span class="mc-badge">GeckoLib</span>
+                <span class="mc-badge">Reference images</span>
                 <span class="mc-badge">Releases + snapshots</span>
                 <span class="mc-badge">Auto repair</span><span class="mc-badge">Shader validation</span>
               </div>
@@ -188,11 +227,19 @@ with gr.Blocks(title="BlockSmith — Kimi K3 Minecraft Builder", theme=THEME) as
                 info="BlockSmith compiles with trusted build scaffolding, then feeds compiler errors back to Kimi for up to 3 repair attempts.",
             )
 
+            reference_image = gr.Image(
+                label="Optional reference image for 3D modeling",
+                type="filepath",
+                visible=False,
+                sources=["upload", "clipboard"],
+                info="Kimi K3 can inspect the image and reconstruct recognizable Minecraft geometry, UVs, animation structure, and small pixel textures.",
+            )
+
             gr.Markdown("### 2. Describe what you want")
             prompt = gr.Textbox(
-                label="Build instructions",
+                label="Build / modeling instructions",
                 lines=9,
-                placeholder="Example: Make a Fabric mod that adds a grappling hook crafted from iron, string, and an ender pearl. Add a configurable max range and particles.",
+                placeholder="Example: Make a Fabric mod with a grappling hook — or choose 3D model and make a low-poly crystal golem with articulated arms and a 32x32 texture.",
             )
 
             gr.Markdown("### 3. Optional: improve an existing project")
@@ -202,32 +249,46 @@ with gr.Blocks(title="BlockSmith — Kimi K3 Minecraft Builder", theme=THEME) as
                 with gr.Tab("Folder"):
                     base_folder = gr.File(label="Upload a project folder", file_count="directory", type="filepath")
             include_readme = gr.Checkbox(value=True, label="Include README + build/use instructions")
-            build_btn = gr.Button("✨ Generate → Build → Repair → Verify", variant="primary", elem_id="build-btn")
+            build_btn = gr.Button("✨ Generate → Build / Model → Repair → Verify", variant="primary", elem_id="build-btn")
 
         with gr.Column(scale=2, elem_classes="mc-card"):
             gr.Markdown("### Result")
-            status = gr.Markdown("BlockSmith will show generation, compilation, repair, and validation results here—including the reason if something fails.")
-            output_files = gr.File(label="Download JAR / source / pack", file_count="multiple")
+            status = gr.Markdown("BlockSmith will show generation, compilation/modeling, repair, and validation results here—including the reason if something fails.")
+            output_files = gr.File(label="Download JAR / source / model / pack", file_count="multiple")
             manifest = gr.JSON(label="Build manifest")
             build_log = gr.Textbox(label="Build / validation log", lines=18, max_lines=40, interactive=False, show_copy_button=True)
             gr.Markdown(
                 """
                 **Verification levels**
-                - **Mods/plugins:** BlockSmith compiles using its own trusted build scaffold. If compilation fails, compiler output is sent back to Kimi for repair, up to 3 attempts.
-                - **Shaders:** BlockSmith checks layout/includes and runs GLSL syntax validation when possible, then repairs validator failures. This cannot prove the final visual appearance without launching Minecraft + the target shader loader.
-                - **Resource packs:** `pack.mcmeta` and basic structure are validated before download.
+                - **Mods/plugins:** compiles using BlockSmith-owned build scaffolding; compiler errors are sent back to Kimi for repair, up to 3 attempts.
+                - **3D models:** validates Java model JSON / `.bbmodel` / GeckoLib geometry and animations, UV/geometry structure, generated PNG texture grids, and obvious broken references. A reference image can guide the model.
+                - **Shaders:** checks layout/includes and runs GLSL syntax validation when possible, then repairs validator failures.
+                - **Resource packs:** validates `pack.mcmeta` and basic structure.
+
+                Model/shader validation is structural. Final appearance still needs an artistic check in Blockbench or Minecraft.
                 """
             )
 
     theme_btn.click(fn=None, js=TOGGLE_JS)
-    artifact_kind.change(on_artifact_change, inputs=artifact_kind, outputs=[loader, output_preference])
+    artifact_kind.change(on_artifact_change, inputs=artifact_kind, outputs=[loader, output_preference, reference_image])
     loader.change(explain_loader, inputs=[loader, version], outputs=compatibility)
     version.change(explain_loader, inputs=[loader, version], outputs=compatibility)
     refresh.click(refresh_versions, outputs=[version, version_status], api_name="refresh_versions")
     demo.load(refresh_versions, outputs=[version, version_status])
     build_btn.click(
         run_builder,
-        inputs=[project_name, artifact_kind, loader, version, prompt, output_preference, base_archive, base_folder, include_readme],
+        inputs=[
+            project_name,
+            artifact_kind,
+            loader,
+            version,
+            prompt,
+            output_preference,
+            reference_image,
+            base_archive,
+            base_folder,
+            include_readme,
+        ],
         outputs=[status, output_files, manifest, build_log],
         api_name="build",
         concurrency_limit=1,
