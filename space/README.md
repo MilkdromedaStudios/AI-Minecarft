@@ -20,7 +20,7 @@ tags:
   - gradio
   - zerogpu
   - agents
-short_description: Build Minecraft mods, plugins, resource packs and shaders with Kimi K3.
+short_description: Build Minecraft mods, plugins, packs with Kimi K3.
 ---
 
 # ⛏️ BlockSmith
