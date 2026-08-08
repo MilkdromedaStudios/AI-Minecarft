@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Optional
 
 import gradio as gr
+import spaces
 
 from minecraft_builder import KIMI_MODEL, build_project, list_minecraft_versions, loader_note
 
@@ -80,6 +81,12 @@ JS = r"""
 """
 
 ARTIFACTS = ["Minecraft mod", "Server plugin", "Resource pack", "Shader pack"]
+
+
+@spaces.GPU(duration=1)
+def _zerogpu_marker() -> str:
+    """ZeroGPU registration marker; normal BlockSmith requests never call this."""
+    return "BlockSmith uses remote Hugging Face Inference Providers."
 
 
 def refresh_versions():
