@@ -3,9 +3,6 @@ name: Deploy BlockSmith to Hugging Face
 on:
   push:
     branches: [main]
-    paths:
-      - 'space/**'
-      - '.github/workflows/sync-blocksmith-space.yml'
   workflow_dispatch:
 
 permissions:
@@ -43,15 +40,15 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r space/requirements.txt pytest
           python -m pip install --upgrade huggingface_hub
-          python -m py_compile space/app.py space/minecraft_builder.py space/test_builder.py
+          python -m py_compile space/app.py space/minecraft_builder.py space/modeling_builder.py space/test_builder.py
           PYTHONPATH=space pytest -q space/test_builder.py
           PYTHONPATH=space python -c "import app; print('BlockSmith Gradio app imported successfully')"
 
           PYTHONPATH=space python - <<'PY'
           import app
-          app.demo.queue(default_concurrency_limit=2).launch(
+          app.demo.queue(default_concurrency_limit=1).launch(
               css=app.CSS,
-              js=app.JS,
+              js=app.INIT_JS,
               server_name="127.0.0.1",
               server_port=7861,
               prevent_thread_lock=True,
@@ -142,8 +139,6 @@ jobs:
 
           dump_state("FIRST FAILURE")
 
-          # One automatic restart handles transient replica/startup failures without
-          # hiding the original diagnostics.
           print("Attempting one automatic Space restart...")
           api.restart_space(repo_id=repo_id)
           runtime = api.wait_for_space(repo_id=repo_id, timeout=300, poll_interval=2)
