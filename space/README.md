@@ -25,7 +25,7 @@ short_description: Build Minecraft mods, plugins, packs with Kimi K3.
 
 # ⛏️ BlockSmith
 
-BlockSmith generates, builds, repairs, and validates Minecraft projects with
+BlockSmith generates, models, builds, repairs, and validates Minecraft projects with
 [`moonshotai/Kimi-K3`](https://huggingface.co/moonshotai/Kimi-K3).
 
 ## What it supports
@@ -33,11 +33,29 @@ BlockSmith generates, builds, repairs, and validates Minecraft projects with
 - **Mods:** Fabric, Forge, NeoForge, Quilt
 - **Server plugins:** Paper, Purpur
 - **Content packs:** resource packs and shader packs
+- **3D modeling:** Java block/item models, editable Blockbench `.bbmodel` projects, GeckoLib geometry + animation, and modded entity assets
+- **Reference images:** Kimi K3 can inspect an uploaded concept/reference image and use it to reconstruct Minecraft geometry, proportions, UVs, and small pixel textures
+- **Generated textures:** Kimi can describe a pixel grid which BlockSmith converts into real PNG texture files (up to 64×64)
 - **Minecraft versions:** populated live from Mojang's Java version manifest, including releases and snapshots
 - **Import as a base:** ZIP, JAR, pack archive, or uploaded project folder
 - **Light + dark UI** with a persistent toggle
 - **Detailed errors and logs:** failures are shown in the page instead of a generic `Error`
 - **Hugging Face OAuth:** visitors use their own HF inference access instead of a shared public API key
+
+## 3D modeling behavior
+
+Choose **3D model / animation** as the target, then choose one of:
+
+- **Java block/item model** — runtime model JSON with elements, faces, UVs, display transforms, and texture references
+- **Blockbench (.bbmodel)** — an editable Blockbench source project plus a practical runtime export when appropriate
+- **GeckoLib model + animation** — geometry JSON and animation JSON with matching bones, pivots, cubes, UVs, and animation channels
+- **Modded entity model** — entity geometry/model assets plus the small model/renderer source needed to use them
+
+An optional reference image can be uploaded. Kimi K3 is multimodal, so the image is sent with the modeling instructions and used as visual guidance.
+
+BlockSmith validates generated model JSON, `.bbmodel` metadata/structure, GeckoLib geometry and animations, basic OBJ structure, generated texture grids, and obvious broken generated texture references. If validation fails, the errors are sent back to Kimi for up to **3 repair attempts** before the model ZIP is returned.
+
+Structural validation cannot prove that every angle looks artistically perfect. Final appearance should still be checked in Blockbench or in the target Minecraft client.
 
 ## Automatic JAR builds
 
@@ -75,7 +93,7 @@ BlockSmith is deployed as a Hugging Face **ZeroGPU Gradio Space**. Kimi K3 itsel
 Hugging Face Inference Providers rather than loading the model in the Space. The ZeroGPU marker exists
 only to satisfy the free ZeroGPU hosting tier and is not called by normal BlockSmith builds.
 
-The Space itself has no app paywall. Kimi K3 generation/repair requests use the signed-in visitor's
+The Space itself has no app paywall. Kimi K3 generation/repair/modeling requests use the signed-in visitor's
 Hugging Face Inference Providers allowance or credits, and provider availability/quotas can change.
 
 ## Imported JARs

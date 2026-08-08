@@ -1,4 +1,5 @@
 from minecraft_builder import _required_file_warnings, _safe_relpath, _sanitize_files
+from modeling_builder import _render_textures, validate_model_project
 
 
 def test_safe_relpath():
@@ -20,3 +21,37 @@ def test_sanitize_files():
 def test_required_resource_pack():
     warnings = _required_file_warnings("Resource pack", "Vanilla / N/A", {"assets/x.txt"})
     assert any("pack.mcmeta" in w for w in warnings)
+
+
+def test_model_texture_render_and_validation():
+    textures, warnings = _render_textures([
+        {
+            "path": "assets/demo/textures/item/crystal.png",
+            "width": 2,
+            "height": 2,
+            "pixels": [
+                ["#ff0000", "#00ff00"],
+                ["#0000ff", "#ffffff80"],
+            ],
+        }
+    ])
+    assert not warnings
+    assert textures["assets/demo/textures/item/crystal.png"].startswith(b"\x89PNG")
+
+    files = {
+        "assets/demo/models/item/crystal.json": """
+        {
+          "parent": "minecraft:item/generated",
+          "textures": {"layer0": "demo:item/crystal"}
+        }
+        """
+    }
+    ok, log = validate_model_project(files, textures, "Java block/item model")
+    assert ok, log
+
+
+def test_bbmodel_requires_meta_version():
+    files = {"model.bbmodel": '{"elements":[],"outliner":[]}'}
+    ok, log = validate_model_project(files, {}, "Blockbench (.bbmodel)")
+    assert not ok
+    assert "meta.format_version" in log
