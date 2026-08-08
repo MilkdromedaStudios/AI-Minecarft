@@ -47,6 +47,22 @@ jobs:
           PYTHONPATH=space pytest -q space/test_builder.py
           PYTHONPATH=space python -c "import app; print('BlockSmith Gradio app imported successfully')"
 
+          # Exercise the same queue + launch path used by the Space, but do not block CI.
+          PYTHONPATH=space python - <<'PY'
+          import app
+          app.demo.queue(default_concurrency_limit=2).launch(
+              css=app.CSS,
+              js=app.JS,
+              server_name="127.0.0.1",
+              server_port=7861,
+              prevent_thread_lock=True,
+              show_error=True,
+              quiet=True,
+          )
+          app.demo.close()
+          print("BlockSmith Gradio launch smoke test passed")
+          PY
+
       - name: Verify Hugging Face authentication
         shell: bash
         env:
@@ -91,7 +107,26 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          set -euo pipefail
+          set +e
           hf spaces wait "$HF_REPO_ID" --timeout 10m
-          hf spaces info "$HF_REPO_ID"
+          wait_status=$?
+          set -e
+
+          echo "::group::Hugging Face Space info"
+          hf spaces info "$HF_REPO_ID" || true
+          echo "::endgroup::"
+
+          if [[ $wait_status -ne 0 ]]; then
+            echo "::group::Hugging Face container logs (last 200 lines)"
+            hf spaces logs -n 200 "$HF_REPO_ID" || true
+            echo "::endgroup::"
+
+            echo "::group::Hugging Face build logs (last 100 lines)"
+            hf spaces logs --build -n 100 "$HF_REPO_ID" || true
+            echo "::endgroup::"
+
+            echo "::error::BlockSmith did not reach RUNNING. See Space logs above."
+            exit $wait_status
+          fi
+
           echo "BlockSmith: https://huggingface.co/spaces/$HF_REPO_ID"
