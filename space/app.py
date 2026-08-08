@@ -1,86 +1,74 @@
 from __future__ import annotations
 
+import traceback
 from typing import Optional
 
 import gradio as gr
 import spaces
 
-from minecraft_builder import KIMI_MODEL, build_project, list_minecraft_versions, loader_note
+from minecraft_builder import KIMI_MODEL, BlockSmithError, build_project, list_minecraft_versions, loader_note
+
+THEME = gr.themes.Soft().set(
+    body_background_fill="#f7f8fb",
+    body_background_fill_dark="#090d15",
+    body_text_color="#172033",
+    body_text_color_dark="#f8fafc",
+    block_background_fill="#ffffff",
+    block_background_fill_dark="#111827",
+    block_border_color="#d8dee9",
+    block_border_color_dark="#263244",
+    input_background_fill="#ffffff",
+    input_background_fill_dark="#172033",
+)
 
 CSS = r"""
-:root {
-  --mc-bg: #f7f8fb;
-  --mc-panel: #ffffff;
-  --mc-panel-2: #eef2f7;
-  --mc-text: #172033;
-  --mc-muted: #667085;
-  --mc-border: #d8dee9;
-  --mc-accent: #6b7cff;
-  --mc-accent-2: #7c3aed;
-  --mc-success: #16a34a;
-  --mc-shadow: 0 16px 45px rgba(15,23,42,.08);
-}
-.dark {
-  --mc-bg: #090d15;
-  --mc-panel: #111827;
-  --mc-panel-2: #172033;
-  --mc-text: #f8fafc;
-  --mc-muted: #9ca3af;
-  --mc-border: #263244;
-  --mc-accent: #8b9cff;
-  --mc-accent-2: #a78bfa;
-  --mc-success: #4ade80;
-  --mc-shadow: 0 16px 45px rgba(0,0,0,.35);
-}
-.gradio-container {
-  max-width: 1500px !important;
-  background: var(--mc-bg) !important;
-  color: var(--mc-text) !important;
-}
+.gradio-container { max-width: 1500px !important; }
 #hero, .mc-card {
-  border: 1px solid var(--mc-border);
-  background: var(--mc-panel);
-  box-shadow: var(--mc-shadow);
+  border: 1px solid var(--block-border-color);
+  background: var(--block-background-fill);
+  box-shadow: 0 14px 40px rgba(15,23,42,.08);
   border-radius: 18px;
 }
 #hero { padding: 22px 26px; margin-bottom: 14px; }
 #hero h1 { margin: 0; font-size: clamp(28px,4vw,46px); }
-#hero p { color: var(--mc-muted); font-size: 16px; }
+#hero p { color: var(--body-text-color-subdued); font-size: 16px; }
 .mc-badge {
   display:inline-block; padding:5px 10px; margin:3px;
-  border-radius:999px; border:1px solid var(--mc-border);
-  background:var(--mc-panel-2); color:var(--mc-text); font-size:12px;
-}
-#theme-toggle {
-  float:right; border:1px solid var(--mc-border); background:var(--mc-panel-2);
-  color:var(--mc-text); border-radius:999px; padding:8px 12px; cursor:pointer;
+  border-radius:999px; border:1px solid var(--block-border-color);
+  background:var(--background-fill-secondary); font-size:12px;
 }
 #build-btn button { font-weight: 750; }
+#theme-button button { min-width: 130px; }
 footer { visibility:hidden; }
 """
 
-JS = r"""
+INIT_JS = r"""
 () => {
-  const saved = localStorage.getItem("mc-theme");
-  const darkPreferred = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-  if (saved === "dark" || (!saved && darkPreferred)) document.documentElement.classList.add("dark");
-  function bindToggle() {
-    const btn = document.getElementById("theme-toggle");
-    if (!btn || btn.dataset.bound) return;
-    btn.dataset.bound = "1";
-    btn.onclick = () => {
-      document.documentElement.classList.toggle("dark");
-      localStorage.setItem("mc-theme", document.documentElement.classList.contains("dark") ? "dark" : "light");
-      btn.textContent = document.documentElement.classList.contains("dark") ? "☀️ Light" : "🌙 Dark";
-    };
-    btn.textContent = document.documentElement.classList.contains("dark") ? "☀️ Light" : "🌙 Dark";
+  const saved = localStorage.getItem('blocksmith-theme');
+  if (saved === 'dark') {
+    document.documentElement.classList.add('dark');
+    document.body?.classList.add('dark');
+  } else if (saved === 'light') {
+    document.documentElement.classList.remove('dark');
+    document.body?.classList.remove('dark');
   }
-  bindToggle();
-  new MutationObserver(bindToggle).observe(document.body, {subtree:true, childList:true});
+}
+"""
+
+TOGGLE_JS = r"""
+() => {
+  const root = document.documentElement;
+  const body = document.body;
+  const currentlyDark = root.classList.contains('dark') || body?.classList.contains('dark');
+  root.classList.toggle('dark', !currentlyDark);
+  body?.classList.toggle('dark', !currentlyDark);
+  localStorage.setItem('blocksmith-theme', currentlyDark ? 'light' : 'dark');
+  return [];
 }
 """
 
 ARTIFACTS = ["Minecraft mod", "Server plugin", "Resource pack", "Shader pack"]
+OUTPUT_CHOICES = ["JAR + Source", "JAR only", "Source only"]
 
 
 @spaces.GPU(duration=1)
@@ -92,15 +80,15 @@ def _zerogpu_marker() -> str:
 def refresh_versions():
     versions = list_minecraft_versions()
     default = versions[0] if versions else "latest"
-    return gr.update(choices=versions, value=default), f"Loaded **{len(versions)}** Mojang versions (releases + snapshots)."
+    return gr.update(choices=versions, value=default), f"Loaded **{len(versions)}** Mojang Java versions, including releases and snapshots."
 
 
 def on_artifact_change(kind: str):
     if kind == "Minecraft mod":
-        return gr.update(choices=["Fabric", "Forge", "NeoForge", "Quilt"], value="Fabric")
+        return gr.update(choices=["Fabric", "Forge", "NeoForge", "Quilt"], value="Fabric"), gr.update(visible=True, value="JAR + Source")
     if kind == "Server plugin":
-        return gr.update(choices=["Paper", "Purpur"], value="Paper")
-    return gr.update(choices=["Vanilla / N/A"], value="Vanilla / N/A")
+        return gr.update(choices=["Paper", "Purpur"], value="Paper"), gr.update(visible=True, value="JAR + Source")
+    return gr.update(choices=["Vanilla / N/A"], value="Vanilla / N/A"), gr.update(visible=False, value="Source only")
 
 
 def explain_loader(loader: str, version: str):
@@ -113,6 +101,7 @@ def run_builder(
     loader: str,
     version: str,
     prompt: str,
+    output_preference: str,
     base_archive,
     base_folder,
     include_readme: bool,
@@ -120,115 +109,129 @@ def run_builder(
 ):
     token = oauth_token.token if oauth_token else None
     if not token:
-        raise gr.Error("Sign in with Hugging Face first so Kimi K3 can use your own HF inference quota.")
-    return build_project(
-        project_name=project_name,
-        artifact_kind=artifact_kind,
-        loader=loader,
-        minecraft_version=version,
-        user_prompt=prompt,
-        base_archive=base_archive,
-        base_folder=base_folder,
-        include_readme=include_readme,
-        hf_token=token,
-    )
+        return (
+            "## ❌ Sign-in required\n\nBlockSmith did not receive a Hugging Face OAuth token. Click **Sign in with Hugging Face** above, then try again.",
+            [],
+            {"ok": False, "error": "missing_hf_oauth_token"},
+            "No Hugging Face OAuth token was supplied to the build function.",
+        )
+    try:
+        return build_project(
+            project_name=project_name,
+            artifact_kind=artifact_kind,
+            loader=loader,
+            minecraft_version=version,
+            user_prompt=prompt,
+            base_archive=base_archive,
+            base_folder=base_folder,
+            include_readme=include_readme,
+            hf_token=token,
+            output_preference=output_preference,
+        )
+    except BlockSmithError as exc:
+        message = str(exc)
+        return (
+            f"## ❌ Build failed\n\n**{message}**\n\nThe full diagnostic message is shown in **Build / validation log** below. No silent `Error` popup should be needed.",
+            [],
+            {"ok": False, "error_type": type(exc).__name__, "message": message},
+            f"{type(exc).__name__}: {message}",
+        )
+    except Exception as exc:
+        tb = traceback.format_exc(limit=12)
+        return (
+            f"## ❌ Unexpected BlockSmith error\n\n**{type(exc).__name__}: {exc}**\n\nA traceback is available in the log below so this failure can be debugged instead of appearing as an unexplained `Error`.",
+            [],
+            {"ok": False, "error_type": type(exc).__name__, "message": str(exc)},
+            tb,
+        )
 
 
-with gr.Blocks(title="BlockSmith — Kimi K3 Minecraft Builder") as demo:
-    gr.HTML(
-        f"""
-        <section id="hero">
-          <button id="theme-toggle">🌙 Dark</button>
-          <h1>⛏️ BlockSmith</h1>
-          <p>Generate Minecraft mods, plugins, resource packs, and shader packs with
-          <b>{KIMI_MODEL}</b> through Hugging Face.</p>
-          <div>
-            <span class="mc-badge">Fabric</span><span class="mc-badge">Forge</span>
-            <span class="mc-badge">NeoForge</span><span class="mc-badge">Quilt</span>
-            <span class="mc-badge">Paper</span><span class="mc-badge">Purpur</span>
-            <span class="mc-badge">Releases + snapshots</span>
-          </div>
-        </section>
-        """
-    )
+with gr.Blocks(title="BlockSmith — Kimi K3 Minecraft Builder", theme=THEME) as demo:
+    with gr.Row():
+        gr.HTML(
+            f"""
+            <section id="hero">
+              <h1>⛏️ BlockSmith</h1>
+              <p>Generate, compile, repair, and validate Minecraft projects with <b>{KIMI_MODEL}</b>.</p>
+              <div>
+                <span class="mc-badge">Fabric</span><span class="mc-badge">Forge</span>
+                <span class="mc-badge">NeoForge</span><span class="mc-badge">Quilt</span>
+                <span class="mc-badge">Paper</span><span class="mc-badge">Purpur</span>
+                <span class="mc-badge">Releases + snapshots</span>
+                <span class="mc-badge">Auto repair</span><span class="mc-badge">Shader validation</span>
+              </div>
+            </section>
+            """,
+            scale=8,
+        )
+        with gr.Column(scale=1, min_width=150):
+            theme_btn = gr.Button("🌓 Light / Dark", elem_id="theme-button", size="sm")
+            gr.LoginButton()
 
     with gr.Row():
         with gr.Column(scale=3, elem_classes="mc-card"):
-            gr.Markdown("### 1. Sign in")
-            gr.Markdown(
-                "The app uses **your Hugging Face inference access** for Kimi K3, so the Space owner does not need to expose a shared API key."
-            )
-            gr.LoginButton()
-
-            gr.Markdown("### 2. Choose the target")
+            gr.Markdown("### 1. Choose the target")
             with gr.Row():
-                project_name = gr.Textbox(
-                    label="Project name", value="MyAwesomePack", placeholder="e.g. BetterCaves", scale=2
-                )
-                artifact_kind = gr.Dropdown(
-                    ARTIFACTS, value="Minecraft mod", label="What are you making?", scale=2
-                )
+                project_name = gr.Textbox(label="Project name", value="MyAwesomeProject", placeholder="e.g. BetterCaves", scale=2)
+                artifact_kind = gr.Dropdown(ARTIFACTS, value="Minecraft mod", label="What are you making?", scale=2)
             with gr.Row():
-                loader = gr.Dropdown(
-                    ["Fabric", "Forge", "NeoForge", "Quilt"], value="Fabric", label="Loader / platform"
-                )
-                version = gr.Dropdown(
-                    ["latest"], value="latest", allow_custom_value=True, label="Minecraft version",
-                    info="Populated live from Mojang, including snapshots."
-                )
+                loader = gr.Dropdown(["Fabric", "Forge", "NeoForge", "Quilt"], value="Fabric", label="Loader / platform")
+                version = gr.Dropdown(["latest"], value="latest", allow_custom_value=True, label="Minecraft version", info="Live Mojang list, including snapshots.")
             refresh = gr.Button("↻ Refresh Minecraft versions", size="sm")
-            version_status = gr.Markdown("Version list will load when the app opens.")
+            version_status = gr.Markdown("Version list loads when the app opens.")
             compatibility = gr.Markdown()
 
-            gr.Markdown("### 3. Describe what you want")
-            prompt = gr.Textbox(
-                label="Build instructions", lines=9,
-                placeholder=(
-                    "Example: Make a Fabric mod that adds a grappling hook crafted from iron, "
-                    "string, and an ender pearl. Add a configurable max range and particles."
-                ),
+            output_preference = gr.Radio(
+                OUTPUT_CHOICES,
+                value="JAR + Source",
+                label="Java project output",
+                info="BlockSmith compiles with trusted build scaffolding, then feeds compiler errors back to Kimi for up to 3 repair attempts.",
             )
 
-            gr.Markdown("### 4. Optional: improve an existing project")
+            gr.Markdown("### 2. Describe what you want")
+            prompt = gr.Textbox(
+                label="Build instructions",
+                lines=9,
+                placeholder="Example: Make a Fabric mod that adds a grappling hook crafted from iron, string, and an ender pearl. Add a configurable max range and particles.",
+            )
+
+            gr.Markdown("### 3. Optional: improve an existing project")
             with gr.Tabs():
                 with gr.Tab("ZIP / JAR / pack"):
-                    base_archive = gr.File(
-                        label="Upload ZIP, JAR, resource pack, shader pack, or source archive",
-                        file_count="single", type="filepath"
-                    )
+                    base_archive = gr.File(label="Upload ZIP, JAR, resource pack, shader pack, or source archive", file_count="single", type="filepath")
                 with gr.Tab("Folder"):
                     base_folder = gr.File(label="Upload a project folder", file_count="directory", type="filepath")
             include_readme = gr.Checkbox(value=True, label="Include README + build/use instructions")
-            build_btn = gr.Button("✨ Build with Kimi K3", variant="primary", elem_id="build-btn")
+            build_btn = gr.Button("✨ Generate → Build → Repair → Verify", variant="primary", elem_id="build-btn")
 
         with gr.Column(scale=2, elem_classes="mc-card"):
-            gr.Markdown("### Build result")
-            status = gr.Markdown(
-                "Your generated project will appear here. Code projects are returned as safe source-project ZIPs; resource/shader packs are directly usable ZIPs."
-            )
-            output_file = gr.File(label="Download build")
-            manifest = gr.JSON(label="Generated file manifest")
+            gr.Markdown("### Result")
+            status = gr.Markdown("BlockSmith will show generation, compilation, repair, and validation results here—including the reason if something fails.")
+            output_files = gr.File(label="Download JAR / source / pack", file_count="multiple")
+            manifest = gr.JSON(label="Build manifest")
+            build_log = gr.Textbox(label="Build / validation log", lines=18, max_lines=40, interactive=False, show_copy_button=True)
             gr.Markdown(
                 """
-                **Safety / compatibility:** imported archives are inspected but never executed.
-                AI-generated Gradle or shell scripts are packaged, not run on the Space.
-                Loader/version support changes over time, so BlockSmith checks live metadata where possible
-                and reports compatibility rather than pretending every historical loader supports every snapshot.
+                **Verification levels**
+                - **Mods/plugins:** BlockSmith compiles using its own trusted build scaffold. If compilation fails, compiler output is sent back to Kimi for repair, up to 3 attempts.
+                - **Shaders:** BlockSmith checks layout/includes and runs GLSL syntax validation when possible, then repairs validator failures. This cannot prove the final visual appearance without launching Minecraft + the target shader loader.
+                - **Resource packs:** `pack.mcmeta` and basic structure are validated before download.
                 """
             )
 
-    artifact_kind.change(on_artifact_change, inputs=artifact_kind, outputs=loader)
+    theme_btn.click(fn=None, js=TOGGLE_JS)
+    artifact_kind.change(on_artifact_change, inputs=artifact_kind, outputs=[loader, output_preference])
     loader.change(explain_loader, inputs=[loader, version], outputs=compatibility)
     version.change(explain_loader, inputs=[loader, version], outputs=compatibility)
     refresh.click(refresh_versions, outputs=[version, version_status], api_name="refresh_versions")
     demo.load(refresh_versions, outputs=[version, version_status])
     build_btn.click(
         run_builder,
-        inputs=[project_name, artifact_kind, loader, version, prompt, base_archive, base_folder, include_readme],
-        outputs=[status, output_file, manifest],
+        inputs=[project_name, artifact_kind, loader, version, prompt, output_preference, base_archive, base_folder, include_readme],
+        outputs=[status, output_files, manifest, build_log],
         api_name="build",
-        concurrency_limit=2,
+        concurrency_limit=1,
     )
 
 if __name__ == "__main__":
-    demo.queue(default_concurrency_limit=2).launch(css=CSS, js=JS)
+    demo.queue(default_concurrency_limit=1).launch(css=CSS, js=INIT_JS, show_error=True)
