@@ -1,4 +1,4 @@
-name: Sync BlockSmith to Hugging Face
+name: Deploy BlockSmith to Hugging Face
 
 on:
   push:
@@ -11,19 +11,85 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: blocksmith-huggingface-deploy
+  cancel-in-progress: true
+
+env:
+  HF_REPO_ID: RespawnerzStudioz/BlockSmith-Minecraft
+
 jobs:
-  sync-space:
+  deploy-space:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Sync Space subdirectory to Hugging Face
-        uses: huggingface/hub-sync@v0.1.0
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          github_repo_id: ${{ github.repository }}
-          huggingface_repo_id: RespawnerzStudioz/BlockSmith-Minecraft
-          hf_token: ${{ secrets.HF_TOKEN }}
-          repo_type: space
-          space_sdk: gradio
-          subdirectory: space
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: space/requirements.txt
+
+      - name: Install and test BlockSmith
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r space/requirements.txt pytest
+          python -m pip install --upgrade huggingface_hub
+          python -m py_compile space/app.py space/minecraft_builder.py space/test_builder.py
+          PYTHONPATH=space pytest -q space/test_builder.py
+          PYTHONPATH=space python -c "import app; print('BlockSmith Gradio app imported successfully')"
+
+      - name: Verify Hugging Face authentication
+        shell: bash
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${HF_TOKEN:-}" ]]; then
+            echo "::error::Repository secret HF_TOKEN is missing."
+            exit 1
+          fi
+          hf auth whoami
+
+      - name: Create or configure free ZeroGPU Space
+        shell: bash
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -euo pipefail
+          hf repos create "$HF_REPO_ID" \
+            --repo-type space \
+            --sdk gradio \
+            --flavor zero-a10g \
+            --public \
+            --exist-ok
+
+          # Keep an already-created Space on the free ZeroGPU tier too.
+          hf spaces settings "$HF_REPO_ID" --hardware zero-a10g
+
+      - name: Mirror Space files to Hugging Face
+        shell: bash
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -euo pipefail
+          hf upload "$HF_REPO_ID" space . \
+            --repo-type space \
+            --delete "*" \
+            --commit-message "Deploy BlockSmith from GitHub ${GITHUB_SHA}"
+
+      - name: Wait for Space to become healthy
+        shell: bash
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -euo pipefail
+          hf spaces wait "$HF_REPO_ID" --timeout 10m
+          hf spaces info "$HF_REPO_ID"
+          echo "BlockSmith: https://huggingface.co/spaces/$HF_REPO_ID"
