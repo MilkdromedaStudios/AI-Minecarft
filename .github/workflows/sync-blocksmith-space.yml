@@ -47,7 +47,6 @@ jobs:
           PYTHONPATH=space pytest -q space/test_builder.py
           PYTHONPATH=space python -c "import app; print('BlockSmith Gradio app imported successfully')"
 
-          # Exercise the same queue + launch path used by the Space, but do not block CI.
           PYTHONPATH=space python - <<'PY'
           import app
           app.demo.queue(default_concurrency_limit=2).launch(
@@ -87,8 +86,6 @@ jobs:
             --flavor zero-a10g \
             --public \
             --exist-ok
-
-          # Keep an already-created Space on the free ZeroGPU tier too.
           hf spaces settings "$HF_REPO_ID" --hardware zero-a10g
 
       - name: Mirror Space files to Hugging Face
@@ -107,26 +104,53 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          set +e
-          hf spaces wait "$HF_REPO_ID" --timeout 10m
-          wait_status=$?
-          set -e
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import sys
+          from huggingface_hub import HfApi
 
-          echo "::group::Hugging Face Space info"
-          hf spaces info "$HF_REPO_ID" || true
-          echo "::endgroup::"
+          repo_id = os.environ["HF_REPO_ID"]
+          token = os.environ["HF_TOKEN"]
+          api = HfApi(token=token)
 
-          if [[ $wait_status -ne 0 ]]; then
-            echo "::group::Hugging Face container logs (last 200 lines)"
-            hf spaces logs -n 200 "$HF_REPO_ID" || true
-            echo "::endgroup::"
+          def dump_state(label):
+              runtime = api.get_space_runtime(repo_id=repo_id)
+              print(f"\n===== {label} =====")
+              print(f"stage={runtime.stage}")
+              print(f"hardware={runtime.hardware}")
+              print(f"requested_hardware={runtime.requested_hardware}")
+              print(f"raw={runtime.raw}")
+              print("===== runtime logs =====")
+              try:
+                  lines = list(api.fetch_space_logs(repo_id=repo_id, follow=False))
+                  print("".join(lines) if lines else "<no buffered runtime logs>")
+              except Exception as exc:
+                  print(f"Could not fetch runtime logs: {exc!r}")
+              print("===== build logs =====")
+              try:
+                  lines = list(api.fetch_space_logs(repo_id=repo_id, build=True, follow=False))
+                  print("".join(lines) if lines else "<no buffered build logs>")
+              except Exception as exc:
+                  print(f"Could not fetch build logs: {exc!r}")
+              return runtime
 
-            echo "::group::Hugging Face build logs (last 100 lines)"
-            hf spaces logs --build -n 100 "$HF_REPO_ID" || true
-            echo "::endgroup::"
+          runtime = api.wait_for_space(repo_id=repo_id, timeout=600, poll_interval=2)
+          if runtime.stage == "RUNNING":
+              print(f"BlockSmith is RUNNING: https://huggingface.co/spaces/{repo_id}")
+              sys.exit(0)
 
-            echo "::error::BlockSmith did not reach RUNNING. See Space logs above."
-            exit $wait_status
-          fi
+          dump_state("FIRST FAILURE")
 
-          echo "BlockSmith: https://huggingface.co/spaces/$HF_REPO_ID"
+          # One automatic restart handles transient replica/startup failures without
+          # hiding the original diagnostics.
+          print("Attempting one automatic Space restart...")
+          api.restart_space(repo_id=repo_id)
+          runtime = api.wait_for_space(repo_id=repo_id, timeout=300, poll_interval=2)
+          if runtime.stage == "RUNNING":
+              print(f"BlockSmith recovered and is RUNNING: https://huggingface.co/spaces/{repo_id}")
+              sys.exit(0)
+
+          dump_state("FAILURE AFTER RESTART")
+          raise SystemExit(f"BlockSmith did not reach RUNNING; final stage={runtime.stage}")
+          PY
