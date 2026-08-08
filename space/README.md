@@ -5,7 +5,7 @@ colorFrom: indigo
 colorTo: purple
 sdk: gradio
 sdk_version: 6.20.0
-python_version: 3.12
+python_version: 3.12.12
 app_file: app.py
 pinned: false
 license: mit
@@ -18,6 +18,7 @@ tags:
   - kimi-k3
   - code-generation
   - gradio
+  - zerogpu
   - agents
 short_description: Build Minecraft mods, plugins, resource packs and shaders with Kimi K3.
 ---
@@ -37,11 +38,11 @@ A Hugging Face Space for generating editable Minecraft projects with
 - **Light + dark UI**
 - **Hugging Face OAuth:** visitors use their own HF inference access instead of a shared public API key
 
-## About “free”
+## Hosting and “free”
 
-The Space itself has no paywall. Kimi K3 requests use the signed-in visitor's Hugging Face
-Inference Providers allowance/credits. Hugging Face quotas and provider availability can change,
-so this is not a promise of unlimited free inference.
+BlockSmith is deployed as a Hugging Face **ZeroGPU Gradio Space** so it can be hosted by an eligible free personal account. The app itself does not request ZeroGPU compute: Kimi K3 runs through Hugging Face Inference Providers instead of loading the 2.8T-parameter model inside this Space.
+
+The Space itself has no paywall. Kimi K3 requests use the signed-in visitor's Hugging Face Inference Providers allowance/credits. Hugging Face quotas and provider availability can change, so this is not a promise of unlimited free inference.
 
 ## Build behavior
 
