@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import traceback
 from typing import Optional
 
@@ -8,6 +9,11 @@ import spaces
 
 from minecraft_builder import KIMI_MODEL, BlockSmithError, build_project, list_minecraft_versions, loader_note
 from modeling_builder import MODEL_FORMATS, build_model_project
+
+SPACE_HOST = (os.getenv("SPACE_HOST") or "respawnerzstudioz-blocksmith-minecraft.hf.space").strip()
+SPACE_BASE_URL = f"https://{SPACE_HOST}"
+HF_LOGIN_URL = f"{SPACE_BASE_URL}/login/huggingface"
+HF_LOGOUT_URL = f"{SPACE_BASE_URL}/logout"
 
 THEME = gr.themes.Soft().set(
     body_background_fill="#f7f8fb",
@@ -43,13 +49,38 @@ CSS = r"""
   background:var(--background-fill-secondary); font-size:12px;
 }
 #top-controls { gap: 8px; }
-#theme-button button, #hf-login button, #build-btn button {
+#theme-button button, #build-btn button {
   min-height: 44px !important;
   touch-action: manipulation;
 }
-#theme-button button, #hf-login button { width: 100% !important; }
+#theme-button button { width: 100% !important; }
 #build-btn button { font-weight: 750; }
 #auth-status { font-size: 13px; }
+.oauth-direct-link {
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  width:100%;
+  min-height:46px;
+  padding:10px 14px;
+  border-radius:10px;
+  box-sizing:border-box;
+  text-decoration:none !important;
+  font-weight:700;
+  text-align:center;
+  touch-action:manipulation;
+  -webkit-tap-highlight-color:transparent;
+}
+.oauth-signin {
+  background:#FFD21E;
+  color:#111827 !important;
+  border:1px solid #e1b900;
+}
+.oauth-signout {
+  background:var(--button-secondary-background-fill);
+  color:var(--body-text-color) !important;
+  border:1px solid var(--block-border-color);
+}
 footer { visibility:hidden; }
 
 @media (max-width: 780px) {
@@ -79,7 +110,7 @@ footer { visibility:hidden; }
   #hero p { font-size: 14px !important; }
   .mc-badge { font-size: 11px; padding: 4px 8px; margin: 2px; }
   input, textarea, select { font-size: 16px !important; }
-  button { min-height: 44px !important; }
+  button, .oauth-direct-link { min-height: 48px !important; }
 }
 """
 
@@ -125,11 +156,19 @@ def refresh_versions():
     return gr.update(choices=versions, value=default), f"Loaded **{len(versions)}** Mojang Java versions, including releases and snapshots."
 
 
-def auth_state(profile: Optional[gr.OAuthProfile]) -> str:
+def auth_state(profile: Optional[gr.OAuthProfile]):
     if profile is None:
-        return "🔐 **Sign-in needed once.** After you authorize BlockSmith, your Hugging Face session is detected automatically on future visits."
+        return (
+            "🔐 **Sign-in needed once.** Tap the yellow button below. It opens BlockSmith directly, outside the Hugging Face iframe, so OAuth works reliably on mobile.",
+            gr.update(visible=True),
+            gr.update(visible=False),
+        )
     name = getattr(profile, "name", None) or "Hugging Face user"
-    return f"✅ **Signed in as {name}.** Your existing Hugging Face session was detected automatically."
+    return (
+        f"✅ **Signed in as {name}.** Your authorized Hugging Face session is active.",
+        gr.update(visible=False),
+        gr.update(visible=True),
+    )
 
 
 def on_artifact_change(kind: str):
@@ -186,7 +225,7 @@ def run_builder(
     token = oauth_token.token if oauth_token else None
     if not token:
         return (
-            "## ❌ Sign-in required\n\nBlockSmith could not detect an authorized Hugging Face session. Use the **Sign in with Hugging Face** control once, approve inference access, then retry. Future visits will reuse the session automatically while it remains valid.",
+            "## ❌ Sign-in required\n\nBlockSmith could not detect an authorized Hugging Face session. Use the yellow **Sign in with Hugging Face** link once, approve inference access, then retry.",
             [],
             {"ok": False, "error": "missing_hf_oauth_token"},
             "No Hugging Face OAuth token was supplied to the build function.",
@@ -253,12 +292,18 @@ with gr.Blocks(title="BlockSmith — Kimi K3 Minecraft Builder", theme=THEME) as
         )
         with gr.Column(scale=1, min_width=150, elem_id="top-controls"):
             auth_status = gr.Markdown("Checking Hugging Face sign-in…", elem_id="auth-status")
-            gr.LoginButton(
-                value="🤗 Sign in with Hugging Face",
-                logout_value="Signed in as {} · Sign out",
-                link_target="_blank",
-                elem_id="hf-login",
-                size="md",
+
+            # Keep a hidden LoginButton so Gradio registers /login/huggingface,
+            # /login/callback, and /logout. The visible controls below use native
+            # top-level links to avoid iframe/mobile click and popup issues.
+            gr.LoginButton(visible=False)
+            sign_in_link = gr.HTML(
+                f'<a class="oauth-direct-link oauth-signin" href="{HF_LOGIN_URL}" target="_top">🤗 Sign in with Hugging Face</a>',
+                visible=True,
+            )
+            sign_out_link = gr.HTML(
+                f'<a class="oauth-direct-link oauth-signout" href="{HF_LOGOUT_URL}" target="_top">Sign out of BlockSmith</a>',
+                visible=False,
             )
             theme_btn = gr.Button("🌓 Light / Dark", elem_id="theme-button", size="md")
 
@@ -330,7 +375,7 @@ with gr.Blocks(title="BlockSmith — Kimi K3 Minecraft Builder", theme=THEME) as
     version.change(explain_loader, inputs=[loader, version], outputs=compatibility)
     refresh.click(refresh_versions, outputs=[version, version_status], api_name="refresh_versions")
     demo.load(refresh_versions, outputs=[version, version_status])
-    demo.load(auth_state, inputs=None, outputs=auth_status)
+    demo.load(auth_state, inputs=None, outputs=[auth_status, sign_in_link, sign_out_link])
     build_btn.click(
         run_builder,
         inputs=[
