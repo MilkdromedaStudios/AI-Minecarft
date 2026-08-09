@@ -16,6 +16,8 @@ SPACE_HOST = (os.getenv("SPACE_HOST") or "respawnerzstudioz-blocksmith-minecraft
 SPACE_BASE_URL = f"https://{SPACE_HOST}"
 HF_LOGIN_URL = f"{SPACE_BASE_URL}/login/huggingface"
 HF_LOGOUT_URL = f"{SPACE_BASE_URL}/logout"
+HF_BILLING_URL = "https://huggingface.co/settings/billing"
+HF_INFERENCE_SETTINGS_URL = "https://huggingface.co/settings/inference-providers"
 KIMI_PRIMARY_MODEL = KIMI_MODEL
 KIMI_FALLBACK_MODEL = "moonshotai/Kimi-K2.7-Code"
 
@@ -164,7 +166,7 @@ def bootstrap_auth(
     profile: gr.OAuthProfile | None,
     oauth_token: gr.OAuthToken | None,
 ):
-    """Resolve OAuth once per page load and store only the visitor token in server-side session state."""
+    """Resolve OAuth once per page load and keep only the visitor token in server-side session state."""
     if profile is None or oauth_token is None or not getattr(oauth_token, "token", None):
         print("[BlockSmith auth] no usable OAuth token in this session", flush=True)
         return (
@@ -222,7 +224,7 @@ def explain_loader(loader: str, version: str):
 
 
 def _normalize_builder_result(result):
-    """Validate the result before Gradio post-processes it so failures become visible diagnostics."""
+    """Validate a builder result before Gradio post-processes it."""
     if not isinstance(result, (tuple, list)) or len(result) != 4:
         raise BlockSmithError(f"Builder returned an invalid result shape: {type(result).__name__}")
     status, outputs, manifest, log = result
@@ -269,6 +271,117 @@ def _is_provider_routing_failure(message: str) -> bool:
         "401", "402", "403", "429", "unauthor", "forbidden", "payment", "credit", "rate limit", "quota"
     )
     return not any(marker in low for marker in user_account_failures)
+
+
+def _classify_failure(message: str) -> tuple[str, str, str, str]:
+    """Turn provider/framework wording into an actionable user-facing error category."""
+    low = (message or "").lower()
+
+    if "402" in low or "payment required" in low or any(
+        phrase in low
+        for phrase in (
+            "credits may be exhausted",
+            "credit balance",
+            "insufficient credit",
+            "insufficient balance",
+            "out of credit",
+            "out of credits",
+            "no credits",
+            "purchase credits",
+        )
+    ):
+        return (
+            "hf_inference_credits_exhausted",
+            "💳 Out of Hugging Face inference credits",
+            "The signed-in Hugging Face account does not have enough Inference Providers credit for this request. BlockSmith did not use the Space owner's deployment token.",
+            f"Add/purchase Hugging Face inference credits or wait for the account's monthly allowance to reset. Billing: {HF_BILLING_URL}",
+        )
+
+    if "429" in low or "rate limit" in low or "too many requests" in low:
+        return (
+            "hf_inference_rate_limited",
+            "⏳ Hugging Face inference is rate-limited",
+            "The signed-in Hugging Face account or selected provider is temporarily rate-limited.",
+            "Try again later. Repeated retries immediately may continue to be rejected.",
+        )
+
+    if any(marker in low for marker in ("401", "403", "unauthor", "forbidden", "invalid token", "expired token")):
+        return (
+            "hf_oauth_not_authorized",
+            "🔐 Hugging Face authorization problem",
+            "BlockSmith could not use the signed-in visitor's OAuth token for inference.",
+            "Sign out of BlockSmith, sign in again, and approve inference access.",
+        )
+
+    if any(marker in low for marker in ("timeout", "timed out", "read timeout", "connect timeout")):
+        return (
+            "inference_timeout",
+            "⌛ Inference request timed out",
+            "The model/provider did not finish the request before the request timeout.",
+            "Try again, or use a smaller request/import if the project is very large.",
+        )
+
+    if _is_provider_routing_failure(message) or any(
+        marker in low for marker in ("no provider", "provider unavailable", "model is not supported", "not supported by any provider")
+    ):
+        return (
+            "hf_provider_unavailable",
+            "🛰️ No Hugging Face provider route is available",
+            "Hugging Face could not route the selected Kimi model to an inference provider for this request.",
+            f"Check Hugging Face Inference Providers settings or try again later: {HF_INFERENCE_SETTINGS_URL}",
+        )
+
+    if "not valid project json" in low or "not valid project" in low or "no usable" in low:
+        return (
+            "model_output_invalid",
+            "🧩 Kimi returned invalid project output",
+            "The model answered, but its generated project data could not be parsed or safely packaged.",
+            "Try the request again. BlockSmith's log below contains the exact parser/validation message.",
+        )
+
+    return (
+        "blocksmith_failure",
+        "❌ BlockSmith could not complete the request",
+        "BlockSmith stopped because one of the generation, validation, compilation, or provider steps failed.",
+        "Read the exact technical message and log below; they are preserved instead of being replaced with a generic Error popup.",
+    )
+
+
+def _friendly_error_result(
+    message: str,
+    *,
+    error_type: str,
+    failures: list[str] | None = None,
+    traceback_text: str | None = None,
+):
+    code, title, explanation, action = _classify_failure(message)
+    safe_message = (message or "Unknown error").strip().replace("`", "'")
+    if len(safe_message) > 1800:
+        safe_message = safe_message[:1800] + "…"
+
+    log_lines = [
+        f"Error category: {code}",
+        f"Error type: {error_type}",
+        f"Raw error: {message}",
+    ]
+    if failures:
+        log_lines.append("\n=== Model attempts ===\n" + "\n".join(failures))
+    if traceback_text:
+        log_lines.append("\n=== Python traceback ===\n" + traceback_text)
+
+    return (
+        f"## {title}\n\n{explanation}\n\n**What to do:** {action}\n\n**Technical message:** `{safe_message}`\n\nThis request used only the signed-in visitor's Hugging Face OAuth token.",
+        [],
+        {
+            "ok": False,
+            "error_code": code,
+            "error_type": error_type,
+            "message": message,
+            "model_attempts": failures or [],
+            "visitor_oauth": True,
+        },
+        "\n".join(log_lines),
+    )
 
 
 def _execute_builder(
@@ -329,9 +442,9 @@ def run_builder(
     )
     if not token:
         return (
-            "## ❌ Sign-in required\n\nYour Hugging Face session is not available to the Build button yet. Sign in, then reload BlockSmith once if necessary.",
+            "## 🔐 Sign-in required\n\nBlockSmith does not have a visitor OAuth token for this browser session. Sign in with Hugging Face and retry.\n\n**No Space-owner API key will be used as a fallback.**",
             [],
-            {"ok": False, "error": "missing_hf_oauth_session_state"},
+            {"ok": False, "error_code": "missing_hf_oauth_session_state", "visitor_oauth": False},
             "Build stopped before inference because the visitor OAuth session token was empty.",
         )
 
@@ -381,21 +494,16 @@ def run_builder(
     except BlockSmithError as exc:
         message = str(exc)
         print(f"[BlockSmith build] handled failure: {type(exc).__name__}: {message}", flush=True)
-        details = "\n".join(failures) if failures else f"{type(exc).__name__}: {message}"
-        return (
-            f"## ❌ Build failed\n\n**{message}**\n\nThis request used only your signed-in Hugging Face OAuth token. The complete diagnostic is shown in **Build / validation log** below.",
-            [],
-            {"ok": False, "error_type": type(exc).__name__, "message": message, "model_attempts": failures},
-            details,
-        )
+        return _friendly_error_result(message, error_type=type(exc).__name__, failures=failures)
     except Exception as exc:
         tb = traceback.format_exc(limit=20)
+        message = str(exc).strip() or repr(exc)
         print("[BlockSmith build] unexpected exception\n" + tb, flush=True)
-        return (
-            f"## ❌ Unexpected BlockSmith error\n\n**{type(exc).__name__}: {exc}**\n\nThe traceback is shown in **Build / validation log** below.",
-            [],
-            {"ok": False, "error_type": type(exc).__name__, "message": str(exc)},
-            tb,
+        return _friendly_error_result(
+            message,
+            error_type=type(exc).__name__,
+            failures=failures,
+            traceback_text=tb,
         )
     finally:
         _set_runtime_kimi_model(KIMI_PRIMARY_MODEL)
@@ -487,7 +595,7 @@ with gr.Blocks(title="BlockSmith — Kimi Minecraft Builder", theme=THEME) as de
 
         with gr.Column(scale=2, elem_classes="mc-card"):
             gr.Markdown("### Result")
-            status = gr.Markdown("BlockSmith will show generation, compilation/modeling, repair, and validation results here—including the reason if something fails.")
+            status = gr.Markdown("BlockSmith will show the exact reason when generation, billing, authorization, routing, compilation, or validation fails.")
             output_files = gr.File(label="Download JAR / source / model / pack", file_count="multiple")
             manifest = gr.JSON(label="Build manifest")
             build_log = gr.Textbox(label="Build / validation log", lines=18, max_lines=40, interactive=False, show_copy_button=True)
@@ -535,4 +643,5 @@ with gr.Blocks(title="BlockSmith — Kimi Minecraft Builder", theme=THEME) as de
     )
 
 if __name__ == "__main__":
-    demo.queue(default_concurrency_limit=1).launch(css=CSS, js=INIT_JS, show_error=True)
+    # BlockSmith renders its own full diagnostics; suppress Gradio's generic red "Error" overlay.
+    demo.queue(default_concurrency_limit=1).launch(css=CSS, js=INIT_JS, show_error=False)
