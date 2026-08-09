@@ -387,7 +387,9 @@ with gr.Blocks(title="BlockSmith — Kimi K3 Minecraft Builder", theme=THEME) as
                 type="filepath",
                 visible=False,
                 sources=["upload", "clipboard"],
-                info="Kimi K3 can inspect the image and reconstruct recognizable Minecraft geometry, UVs, animation structure, and small pixel textures.",
+            )
+            gr.Markdown(
+                "Kimi K3 can inspect the uploaded reference image and use it to reconstruct Minecraft geometry, UVs, animation structure, and small pixel textures."
             )
 
             gr.Markdown("### 2. Describe what you want")
