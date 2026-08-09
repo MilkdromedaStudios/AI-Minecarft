@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import traceback
-from typing import Optional
+from pathlib import Path
 
 import gradio as gr
 import spaces
@@ -156,18 +156,26 @@ def refresh_versions():
     return gr.update(choices=versions, value=default), f"Loaded **{len(versions)}** Mojang Java versions, including releases and snapshots."
 
 
-def auth_state(profile: Optional[gr.OAuthProfile]):
-    if profile is None:
+def bootstrap_auth(
+    profile: gr.OAuthProfile | None,
+    oauth_token: gr.OAuthToken | None,
+):
+    """Resolve OAuth once per page load and store only the token in server-side session state."""
+    if profile is None or oauth_token is None or not getattr(oauth_token, "token", None):
+        print("[BlockSmith auth] no usable OAuth token in this session", flush=True)
         return (
-            "🔐 **Sign-in needed once.** Tap the yellow button below. It opens BlockSmith directly, outside the Hugging Face iframe, so OAuth works reliably on mobile.",
+            "🔐 **Sign-in needed once.** Tap the yellow button below, authorize BlockSmith, then return to the app.",
             gr.update(visible=True),
             gr.update(visible=False),
+            None,
         )
     name = getattr(profile, "name", None) or "Hugging Face user"
+    print(f"[BlockSmith auth] authenticated user={name!r}; token loaded into session state", flush=True)
     return (
-        f"✅ **Signed in as {name}.** Your authorized Hugging Face session is active.",
+        f"✅ **Signed in as {name}.** Inference access is ready for this session.",
         gr.update(visible=False),
         gr.update(visible=True),
+        oauth_token.token,
     )
 
 
@@ -209,6 +217,39 @@ def explain_loader(loader: str, version: str):
     return loader_note(loader, version)
 
 
+def _normalize_builder_result(result):
+    """Validate the result before Gradio post-processes it so failures become visible diagnostics."""
+    if not isinstance(result, (tuple, list)) or len(result) != 4:
+        raise BlockSmithError(f"Builder returned an invalid result shape: {type(result).__name__}")
+    status, outputs, manifest, log = result
+    if outputs is None:
+        outputs = []
+    if not isinstance(outputs, (list, tuple)):
+        outputs = [outputs]
+
+    safe_outputs: list[str] = []
+    output_notes: list[str] = []
+    for value in outputs:
+        if value in (None, ""):
+            continue
+        path = Path(str(value)).expanduser()
+        if not path.is_file():
+            output_notes.append(f"Generated output path does not exist: {path}")
+            continue
+        safe_outputs.append(str(path.resolve()))
+
+    log_text = str(log or "")
+    if output_notes:
+        note = "\n".join(output_notes)
+        log_text += "\n\n=== Output verification ===\n" + note
+        status = str(status or "") + "\n\n⚠️ **Output verification issue:** one or more generated download files were missing. See the log below."
+
+    if not isinstance(manifest, (dict, list, str)) and manifest is not None:
+        manifest = {"ok": False, "warning": f"Non-JSON manifest converted from {type(manifest).__name__}", "value": str(manifest)}
+
+    return str(status or ""), safe_outputs, manifest or {}, log_text
+
+
 def run_builder(
     project_name: str,
     artifact_kind: str,
@@ -220,19 +261,25 @@ def run_builder(
     base_archive,
     base_folder,
     include_readme: bool,
-    oauth_token: Optional[gr.OAuthToken],
+    hf_token: str | None,
 ):
-    token = oauth_token.token if oauth_token else None
-    if not token:
-        return (
-            "## ❌ Sign-in required\n\nBlockSmith could not detect an authorized Hugging Face session. Use the yellow **Sign in with Hugging Face** link once, approve inference access, then retry.",
-            [],
-            {"ok": False, "error": "missing_hf_oauth_token"},
-            "No Hugging Face OAuth token was supplied to the build function.",
-        )
+    """Run one BlockSmith build using a server-side per-session OAuth token."""
     try:
+        token = hf_token if isinstance(hf_token, str) and hf_token.strip() else None
+        print(
+            f"[BlockSmith build] start artifact={artifact_kind!r} loader={loader!r} version={version!r} auth={'yes' if token else 'no'}",
+            flush=True,
+        )
+        if not token:
+            return (
+                "## ❌ Sign-in required\n\nYour Hugging Face session is not available to the Build button yet. Sign in, then reload BlockSmith once if necessary.",
+                [],
+                {"ok": False, "error": "missing_hf_oauth_session_state"},
+                "Build stopped before inference because the per-session OAuth token was empty.",
+            )
+
         if artifact_kind == "3D model / animation":
-            return build_model_project(
+            result = build_model_project(
                 project_name=project_name,
                 model_format=loader,
                 minecraft_version=version,
@@ -240,30 +287,37 @@ def run_builder(
                 reference_image=reference_image,
                 hf_token=token,
             )
-        return build_project(
-            project_name=project_name,
-            artifact_kind=artifact_kind,
-            loader=loader,
-            minecraft_version=version,
-            user_prompt=prompt,
-            base_archive=base_archive,
-            base_folder=base_folder,
-            include_readme=include_readme,
-            hf_token=token,
-            output_preference=output_preference,
-        )
+        else:
+            result = build_project(
+                project_name=project_name,
+                artifact_kind=artifact_kind,
+                loader=loader,
+                minecraft_version=version,
+                user_prompt=prompt,
+                base_archive=base_archive,
+                base_folder=base_folder,
+                include_readme=include_readme,
+                hf_token=token,
+                output_preference=output_preference,
+            )
+
+        normalized = _normalize_builder_result(result)
+        print(f"[BlockSmith build] completed outputs={len(normalized[1])}", flush=True)
+        return normalized
     except BlockSmithError as exc:
         message = str(exc)
+        print(f"[BlockSmith build] handled failure: {type(exc).__name__}: {message}", flush=True)
         return (
-            f"## ❌ Build failed\n\n**{message}**\n\nThe full diagnostic message is shown in **Build / validation log** below. No silent `Error` popup should be needed.",
+            f"## ❌ Build failed\n\n**{message}**\n\nThe complete diagnostic is shown in **Build / validation log** below.",
             [],
             {"ok": False, "error_type": type(exc).__name__, "message": message},
             f"{type(exc).__name__}: {message}",
         )
     except Exception as exc:
-        tb = traceback.format_exc(limit=12)
+        tb = traceback.format_exc(limit=20)
+        print("[BlockSmith build] unexpected exception\n" + tb, flush=True)
         return (
-            f"## ❌ Unexpected BlockSmith error\n\n**{type(exc).__name__}: {exc}**\n\nA traceback is available in the log below so this failure can be debugged instead of appearing as an unexplained `Error`.",
+            f"## ❌ Unexpected BlockSmith error\n\n**{type(exc).__name__}: {exc}**\n\nThe traceback is shown in **Build / validation log** below.",
             [],
             {"ok": False, "error_type": type(exc).__name__, "message": str(exc)},
             tb,
@@ -271,6 +325,9 @@ def run_builder(
 
 
 with gr.Blocks(title="BlockSmith — Kimi K3 Minecraft Builder", theme=THEME) as demo:
+    # Sensitive OAuth data stays in per-session server state, never BrowserState/localStorage.
+    oauth_session_token = gr.State(value=None, time_to_live=60 * 60 * 12)
+
     with gr.Row(elem_id="top-row"):
         gr.HTML(
             f"""
@@ -293,9 +350,7 @@ with gr.Blocks(title="BlockSmith — Kimi K3 Minecraft Builder", theme=THEME) as
         with gr.Column(scale=1, min_width=150, elem_id="top-controls"):
             auth_status = gr.Markdown("Checking Hugging Face sign-in…", elem_id="auth-status")
 
-            # Keep a hidden LoginButton so Gradio registers /login/huggingface,
-            # /login/callback, and /logout. The visible controls below use native
-            # top-level links to avoid iframe/mobile click and popup issues.
+            # Hidden LoginButton registers Gradio's Hugging Face OAuth routes.
             gr.LoginButton(visible=False)
             sign_in_link = gr.HTML(
                 f'<a class="oauth-direct-link oauth-signin" href="{HF_LOGIN_URL}" target="_top">🤗 Sign in with Hugging Face</a>',
@@ -375,7 +430,11 @@ with gr.Blocks(title="BlockSmith — Kimi K3 Minecraft Builder", theme=THEME) as
     version.change(explain_loader, inputs=[loader, version], outputs=compatibility)
     refresh.click(refresh_versions, outputs=[version, version_status], api_name="refresh_versions")
     demo.load(refresh_versions, outputs=[version, version_status])
-    demo.load(auth_state, inputs=None, outputs=[auth_status, sign_in_link, sign_out_link])
+    demo.load(
+        bootstrap_auth,
+        inputs=None,
+        outputs=[auth_status, sign_in_link, sign_out_link, oauth_session_token],
+    )
     build_btn.click(
         run_builder,
         inputs=[
@@ -389,6 +448,7 @@ with gr.Blocks(title="BlockSmith — Kimi K3 Minecraft Builder", theme=THEME) as
             base_archive,
             base_folder,
             include_readme,
+            oauth_session_token,
         ],
         outputs=[status, output_files, manifest, build_log],
         api_name="build",
