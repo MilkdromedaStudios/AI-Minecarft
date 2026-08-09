@@ -2,6 +2,12 @@
 
 BlockSmith is a Hugging Face Space that uses `moonshotai/Kimi-K3` to generate Minecraft mods, plugins, resource packs, and shader packs.
 
+## Try BlockSmith
+
+**Live app:** https://huggingface.co/spaces/RespawnerzStudioz/BlockSmith-Minecraft
+
+**Direct Space app:** https://respawnerzstudioz-blocksmith-minecraft.hf.space/
+
 ## Supported targets
 
 - Fabric
