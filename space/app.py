@@ -7,6 +7,8 @@ from pathlib import Path
 import gradio as gr
 import spaces
 
+import minecraft_builder as minecraft_builder_module
+import modeling_builder as modeling_builder_module
 from minecraft_builder import KIMI_MODEL, BlockSmithError, build_project, list_minecraft_versions, loader_note
 from modeling_builder import MODEL_FORMATS, build_model_project
 
@@ -14,6 +16,8 @@ SPACE_HOST = (os.getenv("SPACE_HOST") or "respawnerzstudioz-blocksmith-minecraft
 SPACE_BASE_URL = f"https://{SPACE_HOST}"
 HF_LOGIN_URL = f"{SPACE_BASE_URL}/login/huggingface"
 HF_LOGOUT_URL = f"{SPACE_BASE_URL}/logout"
+KIMI_PRIMARY_MODEL = KIMI_MODEL
+KIMI_FALLBACK_MODEL = "moonshotai/Kimi-K2.7-Code"
 
 THEME = gr.themes.Soft().set(
     body_background_fill="#f7f8fb",
@@ -160,7 +164,7 @@ def bootstrap_auth(
     profile: gr.OAuthProfile | None,
     oauth_token: gr.OAuthToken | None,
 ):
-    """Resolve OAuth once per page load and store only the token in server-side session state."""
+    """Resolve OAuth once per page load and store only the visitor token in server-side session state."""
     if profile is None or oauth_token is None or not getattr(oauth_token, "token", None):
         print("[BlockSmith auth] no usable OAuth token in this session", flush=True)
         return (
@@ -170,9 +174,9 @@ def bootstrap_auth(
             None,
         )
     name = getattr(profile, "name", None) or "Hugging Face user"
-    print(f"[BlockSmith auth] authenticated user={name!r}; token loaded into session state", flush=True)
+    print(f"[BlockSmith auth] authenticated user={name!r}; visitor token loaded into session state", flush=True)
     return (
-        f"✅ **Signed in as {name}.** Inference access is ready for this session.",
+        f"✅ **Signed in as {name}.** Builds use your own Hugging Face inference allowance—not the Space owner's token.",
         gr.update(visible=False),
         gr.update(visible=True),
         oauth_token.token,
@@ -250,6 +254,60 @@ def _normalize_builder_result(result):
     return str(status or ""), safe_outputs, manifest or {}, log_text
 
 
+def _set_runtime_kimi_model(model: str) -> None:
+    """Set the model used by both builders. Queue concurrency is one, so this is request-safe."""
+    minecraft_builder_module.KIMI_MODEL = model
+    modeling_builder_module.KIMI_MODEL = model
+
+
+def _is_provider_routing_failure(message: str) -> bool:
+    """Only fall back for provider/model availability problems, never auth, billing, or rate limits."""
+    low = message.lower()
+    if not ("inference failed" in low or "inference" in low and "provider" in low):
+        return False
+    user_account_failures = (
+        "401", "402", "403", "429", "unauthor", "forbidden", "payment", "credit", "rate limit", "quota"
+    )
+    return not any(marker in low for marker in user_account_failures)
+
+
+def _execute_builder(
+    *,
+    project_name: str,
+    artifact_kind: str,
+    loader: str,
+    version: str,
+    prompt: str,
+    output_preference: str,
+    reference_image,
+    base_archive,
+    base_folder,
+    include_readme: bool,
+    token: str,
+):
+    if artifact_kind == "3D model / animation":
+        return build_model_project(
+            project_name=project_name,
+            model_format=loader,
+            minecraft_version=version,
+            user_prompt=prompt,
+            reference_image=reference_image,
+            hf_token=token,
+        )
+    return build_project(
+        project_name=project_name,
+        artifact_kind=artifact_kind,
+        loader=loader,
+        minecraft_version=version,
+        user_prompt=prompt,
+        base_archive=base_archive,
+        base_folder=base_folder,
+        include_readme=include_readme,
+        hf_token=token,
+        output_preference=output_preference,
+    )
+
+
 def run_builder(
     project_name: str,
     artifact_kind: str,
@@ -263,55 +321,72 @@ def run_builder(
     include_readme: bool,
     hf_token: str | None,
 ):
-    """Run one BlockSmith build using a server-side per-session OAuth token."""
-    try:
-        token = hf_token if isinstance(hf_token, str) and hf_token.strip() else None
-        print(
-            f"[BlockSmith build] start artifact={artifact_kind!r} loader={loader!r} version={version!r} auth={'yes' if token else 'no'}",
-            flush=True,
+    """Run one BlockSmith build using only the signed-in visitor's OAuth token."""
+    token = hf_token if isinstance(hf_token, str) and hf_token.strip() else None
+    print(
+        f"[BlockSmith build] start artifact={artifact_kind!r} loader={loader!r} version={version!r} auth={'yes' if token else 'no'}",
+        flush=True,
+    )
+    if not token:
+        return (
+            "## ❌ Sign-in required\n\nYour Hugging Face session is not available to the Build button yet. Sign in, then reload BlockSmith once if necessary.",
+            [],
+            {"ok": False, "error": "missing_hf_oauth_session_state"},
+            "Build stopped before inference because the visitor OAuth session token was empty.",
         )
-        if not token:
-            return (
-                "## ❌ Sign-in required\n\nYour Hugging Face session is not available to the Build button yet. Sign in, then reload BlockSmith once if necessary.",
-                [],
-                {"ok": False, "error": "missing_hf_oauth_session_state"},
-                "Build stopped before inference because the per-session OAuth token was empty.",
-            )
 
-        if artifact_kind == "3D model / animation":
-            result = build_model_project(
-                project_name=project_name,
-                model_format=loader,
-                minecraft_version=version,
-                user_prompt=prompt,
-                reference_image=reference_image,
-                hf_token=token,
-            )
-        else:
-            result = build_project(
-                project_name=project_name,
-                artifact_kind=artifact_kind,
-                loader=loader,
-                minecraft_version=version,
-                user_prompt=prompt,
-                base_archive=base_archive,
-                base_folder=base_folder,
-                include_readme=include_readme,
-                hf_token=token,
-                output_preference=output_preference,
-            )
+    failures: list[str] = []
+    models = [KIMI_PRIMARY_MODEL, KIMI_FALLBACK_MODEL]
+    try:
+        for index, model in enumerate(models):
+            _set_runtime_kimi_model(model)
+            print(f"[BlockSmith build] inference model attempt={index + 1} model={model}", flush=True)
+            try:
+                result = _execute_builder(
+                    project_name=project_name,
+                    artifact_kind=artifact_kind,
+                    loader=loader,
+                    version=version,
+                    prompt=prompt,
+                    output_preference=output_preference,
+                    reference_image=reference_image,
+                    base_archive=base_archive,
+                    base_folder=base_folder,
+                    include_readme=include_readme,
+                    token=token,
+                )
+                normalized = _normalize_builder_result(result)
+                status, output_files, manifest, log = normalized
+                if isinstance(manifest, dict):
+                    manifest["model_used"] = model
+                    manifest["visitor_oauth"] = True
+                    manifest["fallback_used"] = model != KIMI_PRIMARY_MODEL
+                if model != KIMI_PRIMARY_MODEL:
+                    status = (
+                        f"ℹ️ **{KIMI_PRIMARY_MODEL} could not be routed through Hugging Face for this request, so BlockSmith automatically used {model} with your same visitor OAuth token.**\n\n"
+                        + status
+                    )
+                    log = "\n".join(failures + [f"Fallback model succeeded: {model}", log])
+                print(f"[BlockSmith build] completed model={model} outputs={len(output_files)}", flush=True)
+                return status, output_files, manifest, log
+            except BlockSmithError as exc:
+                message = str(exc)
+                failures.append(f"Model attempt failed ({model}): {type(exc).__name__}: {message}")
+                print(f"[BlockSmith build] model failure model={model}: {message}", flush=True)
+                if index == 0 and _is_provider_routing_failure(message):
+                    continue
+                raise
 
-        normalized = _normalize_builder_result(result)
-        print(f"[BlockSmith build] completed outputs={len(normalized[1])}", flush=True)
-        return normalized
+        raise BlockSmithError("No Kimi inference route completed successfully.\n" + "\n".join(failures))
     except BlockSmithError as exc:
         message = str(exc)
         print(f"[BlockSmith build] handled failure: {type(exc).__name__}: {message}", flush=True)
+        details = "\n".join(failures) if failures else f"{type(exc).__name__}: {message}"
         return (
-            f"## ❌ Build failed\n\n**{message}**\n\nThe complete diagnostic is shown in **Build / validation log** below.",
+            f"## ❌ Build failed\n\n**{message}**\n\nThis request used only your signed-in Hugging Face OAuth token. The complete diagnostic is shown in **Build / validation log** below.",
             [],
-            {"ok": False, "error_type": type(exc).__name__, "message": message},
-            f"{type(exc).__name__}: {message}",
+            {"ok": False, "error_type": type(exc).__name__, "message": message, "model_attempts": failures},
+            details,
         )
     except Exception as exc:
         tb = traceback.format_exc(limit=20)
@@ -322,9 +397,11 @@ def run_builder(
             {"ok": False, "error_type": type(exc).__name__, "message": str(exc)},
             tb,
         )
+    finally:
+        _set_runtime_kimi_model(KIMI_PRIMARY_MODEL)
 
 
-with gr.Blocks(title="BlockSmith — Kimi K3 Minecraft Builder", theme=THEME) as demo:
+with gr.Blocks(title="BlockSmith — Kimi Minecraft Builder", theme=THEME) as demo:
     # Sensitive OAuth data stays in per-session server state, never BrowserState/localStorage.
     oauth_session_token = gr.State(value=None, time_to_live=60 * 60 * 12)
 
@@ -333,7 +410,7 @@ with gr.Blocks(title="BlockSmith — Kimi K3 Minecraft Builder", theme=THEME) as
             f"""
             <section id="hero">
               <h1>⛏️ BlockSmith</h1>
-              <p>Generate, model, compile, repair, and validate Minecraft projects with <b>{KIMI_MODEL}</b>.</p>
+              <p>Generate, model, compile, repair, and validate Minecraft projects with <b>{KIMI_PRIMARY_MODEL}</b>, with an automatic Kimi coding fallback if HF routing is unavailable.</p>
               <div>
                 <span class="mc-badge">Fabric</span><span class="mc-badge">Forge</span>
                 <span class="mc-badge">NeoForge</span><span class="mc-badge">Quilt</span>
@@ -353,7 +430,7 @@ with gr.Blocks(title="BlockSmith — Kimi K3 Minecraft Builder", theme=THEME) as
             # Hidden LoginButton registers Gradio's Hugging Face OAuth routes.
             gr.LoginButton(visible=False)
             sign_in_link = gr.HTML(
-                f'<a class="oauth-direct-link oauth-signin" href="{HF_LOGIN_URL}" target="_top">🤗 Sign in with Hugging Face</a>',
+                f'<a class="oauth-direct-link oauth-signin" href="{HF_LOGIN_URL}" target="_top">🤗 Sign in to use your own HF inference</a>',
                 visible=True,
             )
             sign_out_link = gr.HTML(
@@ -389,7 +466,7 @@ with gr.Blocks(title="BlockSmith — Kimi K3 Minecraft Builder", theme=THEME) as
                 sources=["upload", "clipboard"],
             )
             gr.Markdown(
-                "Kimi K3 can inspect the uploaded reference image and use it to reconstruct Minecraft geometry, UVs, animation structure, and small pixel textures."
+                "Kimi can inspect the uploaded reference image and use it to reconstruct Minecraft geometry, UVs, animation structure, and small pixel textures."
             )
 
             gr.Markdown("### 2. Describe what you want")
@@ -406,7 +483,7 @@ with gr.Blocks(title="BlockSmith — Kimi K3 Minecraft Builder", theme=THEME) as
                 with gr.Tab("Folder"):
                     base_folder = gr.File(label="Upload a project folder", file_count="directory", type="filepath")
             include_readme = gr.Checkbox(value=True, label="Include README + build/use instructions")
-            build_btn = gr.Button("✨ Generate → Build / Model → Repair → Verify", variant="primary", elem_id="build-btn")
+            build_btn = gr.Button("✨ Make → Build / Model → Repair → Verify", variant="primary", elem_id="build-btn")
 
         with gr.Column(scale=2, elem_classes="mc-card"):
             gr.Markdown("### Result")
