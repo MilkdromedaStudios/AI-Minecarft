@@ -10,7 +10,7 @@ app_file: app.py
 pinned: false
 license: mit
 hf_oauth: true
-hf_oauth_expiration_minutes: 480
+hf_oauth_expiration_minutes: 43200
 hf_oauth_scopes:
   - inference-api
 tags:
@@ -38,9 +38,14 @@ BlockSmith generates, models, builds, repairs, and validates Minecraft projects 
 - **Generated textures:** Kimi can describe a pixel grid which BlockSmith converts into real PNG texture files (up to 64×64)
 - **Minecraft versions:** populated live from Mojang's Java version manifest, including releases and snapshots
 - **Import as a base:** ZIP, JAR, pack archive, or uploaded project folder
-- **Light + dark UI** with a persistent toggle
+- **Mobile-friendly UI:** responsive one-column layout on narrow screens with touch-sized controls
+- **Light + dark UI:** persistent theme mode using Gradio's theme URL mode
 - **Detailed errors and logs:** failures are shown in the page instead of a generic `Error`
-- **Hugging Face OAuth:** visitors use their own HF inference access instead of a shared public API key
+- **Hugging Face OAuth:** existing authorized sessions are detected automatically; first-time authorization opens outside the embedded Space for better mobile/browser compatibility
+
+## Sign-in behavior
+
+BlockSmith uses Hugging Face OAuth because Kimi requests run against the signed-in visitor's own Hugging Face inference access. The first authorization still requires the user to approve the OAuth permission screen. After that, BlockSmith automatically detects the existing authorized session on later visits while it remains valid. OAuth sessions are configured for up to **30 days** before re-authorization is required.
 
 ## 3D modeling behavior
 

@@ -23,7 +23,11 @@ THEME = gr.themes.Soft().set(
 )
 
 CSS = r"""
-.gradio-container { max-width: 1500px !important; }
+.gradio-container {
+  max-width: 1500px !important;
+  width: 100% !important;
+  overflow-x: hidden !important;
+}
 #hero, .mc-card {
   border: 1px solid var(--block-border-color);
   background: var(--block-background-fill);
@@ -38,32 +42,69 @@ CSS = r"""
   border-radius:999px; border:1px solid var(--block-border-color);
   background:var(--background-fill-secondary); font-size:12px;
 }
+#top-controls { gap: 8px; }
+#theme-button button, #hf-login button, #build-btn button {
+  min-height: 44px !important;
+  touch-action: manipulation;
+}
+#theme-button button, #hf-login button { width: 100% !important; }
 #build-btn button { font-weight: 750; }
-#theme-button button { min-width: 130px; }
+#auth-status { font-size: 13px; }
 footer { visibility:hidden; }
+
+@media (max-width: 780px) {
+  .gradio-container {
+    padding: 8px !important;
+    margin: 0 !important;
+  }
+  #top-row, #workspace-row {
+    flex-direction: column !important;
+    gap: 10px !important;
+  }
+  #top-row > *, #workspace-row > * {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    flex: 1 1 auto !important;
+  }
+  #top-controls {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+  #hero {
+    padding: 16px 14px !important;
+    margin-bottom: 4px !important;
+  }
+  #hero h1 { font-size: 30px !important; }
+  #hero p { font-size: 14px !important; }
+  .mc-badge { font-size: 11px; padding: 4px 8px; margin: 2px; }
+  input, textarea, select { font-size: 16px !important; }
+  button { min-height: 44px !important; }
+}
 """
 
 INIT_JS = r"""
 () => {
+  const url = new URL(window.location.href);
   const saved = localStorage.getItem('blocksmith-theme');
-  if (saved === 'dark') {
-    document.documentElement.classList.add('dark');
-    document.body?.classList.add('dark');
-  } else if (saved === 'light') {
-    document.documentElement.classList.remove('dark');
-    document.body?.classList.remove('dark');
+  const systemDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const desired = saved || (systemDark ? 'dark' : 'light');
+  if (url.searchParams.get('__theme') !== desired) {
+    url.searchParams.set('__theme', desired);
+    window.location.replace(url.toString());
   }
 }
 """
 
 TOGGLE_JS = r"""
 () => {
-  const root = document.documentElement;
-  const body = document.body;
-  const currentlyDark = root.classList.contains('dark') || body?.classList.contains('dark');
-  root.classList.toggle('dark', !currentlyDark);
-  body?.classList.toggle('dark', !currentlyDark);
-  localStorage.setItem('blocksmith-theme', currentlyDark ? 'light' : 'dark');
+  const url = new URL(window.location.href);
+  const current = url.searchParams.get('__theme') ||
+    (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  const next = current === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('blocksmith-theme', next);
+  url.searchParams.set('__theme', next);
+  window.location.assign(url.toString());
   return [];
 }
 """
@@ -82,6 +123,13 @@ def refresh_versions():
     versions = list_minecraft_versions()
     default = versions[0] if versions else "latest"
     return gr.update(choices=versions, value=default), f"Loaded **{len(versions)}** Mojang Java versions, including releases and snapshots."
+
+
+def auth_state(profile: Optional[gr.OAuthProfile]) -> str:
+    if profile is None:
+        return "🔐 **Sign-in needed once.** After you authorize BlockSmith, your Hugging Face session is detected automatically on future visits."
+    name = getattr(profile, "name", None) or "Hugging Face user"
+    return f"✅ **Signed in as {name}.** Your existing Hugging Face session was detected automatically."
 
 
 def on_artifact_change(kind: str):
@@ -138,7 +186,7 @@ def run_builder(
     token = oauth_token.token if oauth_token else None
     if not token:
         return (
-            "## ❌ Sign-in required\n\nBlockSmith did not receive a Hugging Face OAuth token. Click **Sign in with Hugging Face** above, then try again.",
+            "## ❌ Sign-in required\n\nBlockSmith could not detect an authorized Hugging Face session. Use the **Sign in with Hugging Face** control once, approve inference access, then retry. Future visits will reuse the session automatically while it remains valid.",
             [],
             {"ok": False, "error": "missing_hf_oauth_token"},
             "No Hugging Face OAuth token was supplied to the build function.",
@@ -184,7 +232,7 @@ def run_builder(
 
 
 with gr.Blocks(title="BlockSmith — Kimi K3 Minecraft Builder", theme=THEME) as demo:
-    with gr.Row():
+    with gr.Row(elem_id="top-row"):
         gr.HTML(
             f"""
             <section id="hero">
@@ -203,11 +251,18 @@ with gr.Blocks(title="BlockSmith — Kimi K3 Minecraft Builder", theme=THEME) as
             """,
             scale=8,
         )
-        with gr.Column(scale=1, min_width=150):
-            theme_btn = gr.Button("🌓 Light / Dark", elem_id="theme-button", size="sm")
-            gr.LoginButton()
+        with gr.Column(scale=1, min_width=150, elem_id="top-controls"):
+            auth_status = gr.Markdown("Checking Hugging Face sign-in…", elem_id="auth-status")
+            gr.LoginButton(
+                value="🤗 Sign in with Hugging Face",
+                logout_value="Signed in as {} · Sign out",
+                link_target="_blank",
+                elem_id="hf-login",
+                size="md",
+            )
+            theme_btn = gr.Button("🌓 Light / Dark", elem_id="theme-button", size="md")
 
-    with gr.Row():
+    with gr.Row(elem_id="workspace-row"):
         with gr.Column(scale=3, elem_classes="mc-card"):
             gr.Markdown("### 1. Choose the target")
             with gr.Row():
@@ -275,6 +330,7 @@ with gr.Blocks(title="BlockSmith — Kimi K3 Minecraft Builder", theme=THEME) as
     version.change(explain_loader, inputs=[loader, version], outputs=compatibility)
     refresh.click(refresh_versions, outputs=[version, version_status], api_name="refresh_versions")
     demo.load(refresh_versions, outputs=[version, version_status])
+    demo.load(auth_state, inputs=None, outputs=auth_status)
     build_btn.click(
         run_builder,
         inputs=[
