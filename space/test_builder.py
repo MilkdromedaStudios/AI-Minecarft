@@ -1,3 +1,4 @@
+from app import _friendly_error_result
 from minecraft_builder import _required_file_warnings, _safe_relpath, _sanitize_files
 from modeling_builder import _render_textures, validate_model_project
 
@@ -55,3 +56,15 @@ def test_bbmodel_requires_meta_version():
     ok, log = validate_model_project(files, {}, "Blockbench (.bbmodel)")
     assert not ok
     assert "meta.format_version" in log
+
+
+def test_out_of_credits_error_is_friendly():
+    status, outputs, manifest, log = _friendly_error_result(
+        "402 Payment Required: insufficient credit balance",
+        error_type="HfHubHTTPError",
+    )
+    assert "Out of Hugging Face inference credits" in status
+    assert outputs == []
+    assert manifest["error_code"] == "hf_inference_credits_exhausted"
+    assert manifest["visitor_oauth"] is True
+    assert "402 Payment Required" in log
