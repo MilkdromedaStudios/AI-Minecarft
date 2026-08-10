@@ -509,7 +509,7 @@ def run_builder(
         _set_runtime_kimi_model(KIMI_PRIMARY_MODEL)
 
 
-with gr.Blocks(title="BlockSmith — Kimi Minecraft Builder", theme=THEME) as demo:
+with gr.Blocks(title="BlockSmith — Kimi Minecraft Builder") as demo:
     # Sensitive OAuth data stays in per-session server state, never BrowserState/localStorage.
     oauth_session_token = gr.State(value=None, time_to_live=60 * 60 * 12)
 
@@ -598,7 +598,7 @@ with gr.Blocks(title="BlockSmith — Kimi Minecraft Builder", theme=THEME) as de
             status = gr.Markdown("BlockSmith will show the exact reason when generation, billing, authorization, routing, compilation, or validation fails.")
             output_files = gr.File(label="Download JAR / source / model / pack", file_count="multiple")
             manifest = gr.JSON(label="Build manifest")
-            build_log = gr.Textbox(label="Build / validation log", lines=18, max_lines=40, interactive=False, show_copy_button=True)
+            build_log = gr.Textbox(label="Build / validation log", lines=18, max_lines=40, interactive=False)
             gr.Markdown(
                 """
                 **Verification levels**
@@ -644,4 +644,4 @@ with gr.Blocks(title="BlockSmith — Kimi Minecraft Builder", theme=THEME) as de
 
 if __name__ == "__main__":
     # BlockSmith renders its own full diagnostics; suppress Gradio's generic red "Error" overlay.
-    demo.queue(default_concurrency_limit=1).launch(css=CSS, js=INIT_JS, show_error=False)
+    demo.queue(default_concurrency_limit=1).launch(css=CSS, js=INIT_JS, theme=THEME, show_error=False)
