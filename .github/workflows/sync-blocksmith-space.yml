@@ -35,6 +35,18 @@ jobs:
 
       - name: Install and test BlockSmith
         shell: bash
+        # Gradio switches to its local OAuth mock outside a Space and that mock
+        # requires a real HF token. Simulate the non-secret Space environment so
+        # CI exercises the real OAuth route-registration path without exposing
+        # the deployment HF_TOKEN or making any OAuth/inference request.
+        env:
+          SYSTEM: spaces
+          SPACE_ID: RespawnerzStudioz/BlockSmith-Minecraft
+          SPACE_HOST: respawnerzstudioz-blocksmith-minecraft.hf.space
+          OAUTH_CLIENT_ID: blocksmith-ci-client
+          OAUTH_CLIENT_SECRET: blocksmith-ci-secret
+          OAUTH_SCOPES: openid profile inference-api
+          OPENID_PROVIDER_URL: https://huggingface.co
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
@@ -49,6 +61,7 @@ jobs:
           app.demo.queue(default_concurrency_limit=1).launch(
               css=app.CSS,
               js=app.INIT_JS,
+              theme=app.THEME,
               server_name="127.0.0.1",
               server_port=7861,
               prevent_thread_lock=True,
