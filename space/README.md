@@ -20,6 +20,7 @@ tags:
   - gradio
   - zerogpu
   - agents
+  - blocksmith-rev-friendly-errors-20260809
 short_description: Build Minecraft mods, plugins, packs with Kimi K3.
 ---
 
@@ -27,6 +28,8 @@ short_description: Build Minecraft mods, plugins, packs with Kimi K3.
 
 BlockSmith generates, models, builds, repairs, and validates Minecraft projects with
 [`moonshotai/Kimi-K3`](https://huggingface.co/moonshotai/Kimi-K3).
+
+**Deployment marker:** `friendly-errors-20260809`
 
 ## What it supports
 
